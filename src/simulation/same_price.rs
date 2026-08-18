@@ -11,6 +11,7 @@ use crate::analytics::information_floor::{analytic_floor, approx_conditional_sd}
 use crate::analytics::metrics::{OnlineStats, quantile_sorted};
 use crate::config::Config;
 use crate::error::Result;
+use crate::simulation::experiment::{Experiment, SimulationContext};
 use crate::simulation::monte_carlo::{Cell, run_conditional};
 
 /// Stable experiment label used for seed derivation.
@@ -131,5 +132,21 @@ mod tests {
                 row.approx_analytic_sd_v
             );
         }
+    }
+}
+
+/// The same-price conditional experiment as an [`Experiment`].
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SamePriceExperiment;
+
+impl Experiment for SamePriceExperiment {
+    type Output = Vec<SamePriceRow>;
+
+    fn name(&self) -> &'static str {
+        "same-price"
+    }
+
+    fn run(&self, ctx: &SimulationContext<'_>) -> Result<Self::Output> {
+        run(ctx.config)
     }
 }

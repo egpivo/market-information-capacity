@@ -1,25 +1,70 @@
 //! The information hierarchy `V -> s_k -> m_i -> P_OC`.
 //!
-//! Each layer is a separate module and a separate type:
+//! # Architecture
 //!
-//! * [`latent`] draws the latent valuation `V`;
-//! * [`sources`] draws the `K` fundamental sources — the only place new
-//!   information about `V` enters the model;
-//! * [`traders`] maps existing sources onto `N_T` trader beliefs;
-//! * [`market`] clears those beliefs into the onchain price `P_OC`;
-//! * [`official`] revises the price when external information arrives.
+//! ```text
+//! LatentProcess
+//!       |  LatentValue
+//!       v
+//! InformationSourceModel
+//!       |  SourceSet
+//!       v
+//! BeliefFormation
+//!       |  BeliefSet
+//!       v
+//! ClearingRule
+//!       |  MarketPrice
+//!       v
+//! RevisionRule  <--  ExternalSignal  <--  ExternalSignalProcess
+//! ```
 //!
-//! The separation is load bearing: because [`traders::TraderLayer`] cannot
-//! reach the source generator, no amount of trader growth can manufacture
-//! fundamental information.
+//! Each arrow is a trait, and each trait is one economic degree of freedom:
+//! what the market is trying to price, how much can independently be known
+//! about it, how participants interpret what is known, how those views become a
+//! price, what new information arrives from outside, and how the market
+//! assimilates it.
+//!
+//! # The dependency rule
+//!
+//! **Fundamental information may only be created by the source layer.**
+//!
+//! * [`BeliefFormation::form`](traders::BeliefFormation::form) receives a
+//!   [`SourceSet`], not a [`LatentValue`].
+//! * [`ClearingRule::clear`](clearing::ClearingRule::clear) receives a
+//!   [`BeliefSet`], not sources and not latent state.
+//! * [`RevisionRule::revise`](official::RevisionRule::revise) receives a
+//!   [`MarketPrice`] and an [`ExternalSignal`], not latent state.
+//!
+//! This direction is deliberate. It prevents a trader count from implicitly
+//! increasing the market's fundamental information capacity — the failure of the
+//! superseded v2 model — and it prevents a clearing or revision rule from
+//! quietly becoming clairvoyant. Because the restriction lives in the
+//! signatures, a future implementation cannot violate it without changing a
+//! trait, which is a visible and reviewable act.
+//!
+//! # Composition
+//!
+//! [`MarketEngine`](market::MarketEngine) wires the six components together with
+//! static dispatch, so there is no vtable in the Monte Carlo hot loop.
+//! [`CanonicalMarket`](market::CanonicalMarket) names the v4 composition that
+//! produces every canonical result.
 
+pub mod clearing;
 pub mod latent;
 pub mod market;
 pub mod official;
 pub mod sources;
 pub mod traders;
+pub mod types;
 
-pub use latent::Latent;
-pub use market::{MarketSimulator, Realization, RevisedRealization, Workspace};
-pub use sources::{SourceDraw, SourceLayer};
-pub use traders::{InterpretationNoise, Representation, TraderLayer};
+pub use clearing::{ClearingRule, EqualRepresentationClearing};
+pub use latent::{GaussianLatent, LatentProcess};
+pub use market::{CanonicalMarket, MarketEngine, Realization, RevisedRealization, Workspace};
+pub use official::{
+    ExternalSignalProcess, FixedWeightRevision, OfficialSignalProcess, RevisionRule,
+};
+pub use sources::{CorrelatedFiniteSources, InformationSourceModel};
+pub use traders::{BeliefFormation, InterpretationNoise, Representation, SourceAttachedBeliefs};
+pub use types::{
+    BeliefSet, ExternalSignal, FundamentalSignal, LatentValue, MarketPrice, SourceSet, TraderBelief,
+};

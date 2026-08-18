@@ -15,6 +15,56 @@ pub mod same_price;
 
 use serde::Serialize;
 
+use crate::config::Config;
+use crate::error::Result;
+
+/// Everything a validation check needs in order to run.
+#[derive(Debug, Clone, Copy)]
+pub struct ValidationContext<'a> {
+    /// The configuration, including the master seed and the gate's scale.
+    pub config: &'a Config,
+}
+
+impl<'a> ValidationContext<'a> {
+    /// Build a context around a configuration.
+    pub fn new(config: &'a Config) -> Self {
+        Self { config }
+    }
+}
+
+/// What a check measured, before it is labelled with a name.
+#[derive(Debug, Clone)]
+pub struct Evidence {
+    /// Whether the property held.
+    pub passed: bool,
+    /// Human-readable evidence, including the measured numbers.
+    pub detail: String,
+}
+
+impl Evidence {
+    /// Build evidence from a condition and its detail.
+    pub fn new(passed: bool, detail: impl Into<String>) -> Self {
+        Self {
+            passed,
+            detail: detail.into(),
+        }
+    }
+}
+
+/// One property of the model that must hold before a result is published.
+///
+/// Checks are heterogeneous, are nowhere near a performance hot path, and are
+/// enumerated once per run, so this is the one place in the crate where dynamic
+/// dispatch is the right tool: the gate holds a `Vec<Box<dyn ValidationCheck>>`
+/// and adding a gate means adding one value to that list.
+pub trait ValidationCheck {
+    /// Stable check name, as printed by the gate.
+    fn name(&self) -> &'static str;
+
+    /// Measure the property.
+    fn run(&self, ctx: &ValidationContext<'_>) -> Result<Evidence>;
+}
+
 /// Outcome of a single check.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "UPPERCASE")]
@@ -64,6 +114,11 @@ impl Check {
         }
     }
 
+    /// Label a check's evidence with its name.
+    pub fn from_evidence(name: &str, evidence: Evidence) -> Self {
+        Self::new(name, evidence.passed, evidence.detail)
+    }
+
     /// Whether the check passed.
     #[inline]
     pub fn passed(&self) -> bool {
@@ -71,4 +126,4 @@ impl Check {
     }
 }
 
-pub use gate::{GateReport, run_gate};
+pub use gate::{GateReport, canonical_checks, run_gate};

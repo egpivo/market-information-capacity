@@ -8,13 +8,13 @@
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::simulation::monte_carlo::{Cell, run_world};
-use crate::validation::Check;
+use crate::validation::{Evidence, ValidationCheck, ValidationContext};
 
 /// Stable experiment label used for seed derivation.
 pub const EXPERIMENT: &str = "gate-fast-follower";
 
 /// Check the Fast Follower signature against the Informative world.
-pub fn check_fast_follower(cfg: &Config) -> Result<Check> {
+fn check_fast_follower(cfg: &Config) -> Result<Evidence> {
     let schedule = cfg.batch_schedule(cfg.validation.realizations);
     let mut rows = Vec::new();
     for (idx, world) in cfg.worlds.presets.iter().enumerate() {
@@ -52,12 +52,26 @@ pub fn check_fast_follower(cfg: &Config) -> Result<Check> {
     let material_revision = *revision > 0.3;
 
     let ok = many_traders && thin_information && weak_pre && strong_response && material_revision;
-    Ok(Check::new(
-        "fast-follower mechanism",
+    Ok(Evidence::new(
         ok,
         format!(
             "{}: N_T={}, K={}, rho_s={}; pre MSE {pre:.3} -> post MSE {post:.3}, mean |revision| {revision:.3} (richest world pre MSE {:.3})",
             world.name, world.traders, world.sources, world.rho_s, richest.1
         ),
     ))
+}
+
+/// Gate: the Fast Follower economic signature holds.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct FastFollowerMechanism;
+
+impl ValidationCheck for FastFollowerMechanism {
+    fn name(&self) -> &'static str {
+        "fast-follower mechanism"
+    }
+
+    fn run(&self, ctx: &ValidationContext<'_>) -> Result<Evidence> {
+        let _ = ctx;
+        check_fast_follower(ctx.config)
+    }
 }

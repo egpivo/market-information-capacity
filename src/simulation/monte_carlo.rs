@@ -8,14 +8,13 @@
 //!
 //! Accumulators are streaming: no experiment materialises a sample matrix.
 
-use rand::Rng;
 use rand_chacha::ChaCha8Rng;
 use rayon::prelude::*;
 
 use crate::analytics::metrics::{OnlineStats, SampleReservoir};
 use crate::config::MarketConfig;
 use crate::error::Result;
-use crate::model::market::MarketSimulator;
+use crate::model::market::CanonicalMarket;
 use crate::rng::{StreamId, derive_seed, stream};
 
 /// An accumulator that can be combined across parallel batches.
@@ -108,7 +107,7 @@ where
 
 /// Monte Carlo estimate of the pre-official price MSE for one market.
 pub fn pre_price_mse(cell: Cell<'_>, market: &MarketConfig) -> Result<OnlineStats> {
-    let sim = MarketSimulator::new(market)?;
+    let sim = CanonicalMarket::from_config(market)?;
     Ok(run_batches(cell, OnlineStats::new, |acc, rng, count| {
         let mut ws = sim.workspace();
         for _ in 0..count {
@@ -162,7 +161,7 @@ pub fn run_world(
     market: &MarketConfig,
     revision_samples: usize,
 ) -> Result<WorldAccumulator> {
-    let sim = MarketSimulator::new(market)?;
+    let sim = CanonicalMarket::from_config(market)?;
     let per_batch = revision_samples.div_ceil(cell.schedule.len().max(1));
     Ok(run_batches(
         cell,
@@ -174,7 +173,7 @@ pub fn run_world(
                 acc.pre_mse.push(revised.pre.squared_error());
                 acc.post_mse.push(revised.post_squared_error());
                 acc.uninformed_mse
-                    .push(revised.pre.latent * revised.pre.latent);
+                    .push(revised.pre.uninformed_squared_error());
                 let revision = revised.abs_revision();
                 acc.abs_revision.push(revision);
                 acc.revision_samples.push(revision, rng);
@@ -216,7 +215,7 @@ pub fn run_conditional(
     band: f64,
     retained: usize,
 ) -> Result<ConditionalAccumulator> {
-    let sim = MarketSimulator::new(market)?;
+    let sim = CanonicalMarket::from_config(market)?;
     let per_batch = retained.div_ceil(cell.schedule.len().max(1));
     Ok(run_batches(
         cell,
@@ -226,8 +225,8 @@ pub fn run_conditional(
             for _ in 0..count {
                 let realization = sim.realize(&mut ws, rng);
                 acc.drawn += 1;
-                if realization.pre_price.abs() < band {
-                    acc.accepted.push(realization.latent, rng);
+                if realization.pre_price.value().abs() < band {
+                    acc.accepted.push(realization.latent.value(), rng);
                 }
             }
         },
@@ -289,16 +288,6 @@ pub fn blocked_pre_price_mse(
         block_se,
         pooled,
     })
-}
-
-/// A single realization helper used by validation checks that need raw draws.
-pub fn sample_prices<R: Rng + ?Sized>(
-    sim: &MarketSimulator,
-    rng: &mut R,
-    n: usize,
-) -> Vec<crate::model::market::Realization> {
-    let mut ws = sim.workspace();
-    (0..n).map(|_| sim.realize(&mut ws, rng)).collect()
 }
 
 #[cfg(test)]

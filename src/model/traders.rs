@@ -1,6 +1,6 @@
-//! The trader layer.
+//! The trader layer: turning existing information into beliefs.
 //!
-//! Trader `i` **follows an existing source** `k(i)` and holds the belief
+//! Trader `i` **follows an existing source** `k(i)` and holds
 //!
 //! ```text
 //! m_i = s_{k(i)} + b_i + nu_i
@@ -9,24 +9,39 @@
 //! where `b_i` is clientele / participation distortion and `nu_i` is
 //! idiosyncratic interpretation noise.
 //!
-//! # Scientific-integrity constraint
+//! # The dependency rule
 //!
-//! This module is deliberately unable to create fundamental information. It
-//! accepts a [`SourceDraw`] and may only index into it; it holds no
-//! [`SourceLayer`](super::sources::SourceLayer), no latent value and no source
-//! random stream. Adding traders therefore changes only how interpretation
-//! noise averages out, never how many independent draws about `V` exist. This
-//! encodes, in the type system, the failure of the superseded v2 model in which
-//! each additional trader implicitly supplied another independent fundamental
-//! signal.
+//! [`BeliefFormation::form`] receives a [`SourceSet`] and **not** a
+//! [`LatentValue`](crate::model::types::LatentValue). That omission is the point
+//! of the trait. A belief model cannot reach the latent state, cannot reach the
+//! source generator, and cannot draw a new fundamental signal of its own — so no
+//! implementation, present or future, can make trader growth increase the
+//! market's fundamental information. This is the failure of the superseded v2
+//! model encoded in the type system rather than in a comment.
+//!
+//! What a belief model *can* do is anything about interpretation: heterogeneous
+//! precision, selected clienteles, attention weighting, traders who read
+//! several sources. All of those operate on information that already exists.
 
-use rand::Rng;
+use rand::{Rng, RngCore};
 use rand_distr::StandardNormal;
 use serde::{Deserialize, Serialize};
 
 use crate::config::TraderConfig;
 use crate::error::{Error, Result};
-use crate::model::sources::SourceDraw;
+use crate::model::types::{BeliefSet, SourceSet, TraderBelief};
+
+/// A model of how a trader population forms beliefs from existing sources.
+pub trait BeliefFormation {
+    /// The trader count `N_T`.
+    fn trader_count(&self) -> usize;
+
+    /// Form the population's beliefs from the available fundamental sources.
+    ///
+    /// The signature deliberately excludes the latent value; see the module
+    /// documentation.
+    fn form<R: RngCore + ?Sized>(&self, sources: &SourceSet, rng: &mut R) -> BeliefSet;
+}
 
 /// How the trader population is spread across the available sources.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -36,39 +51,41 @@ pub enum Representation {
     ///
     /// This is the canonical v4 aggregation. It is the limit of any balanced
     /// assignment and keeps the source layer's contribution to the price equal
-    /// to `(1/K) * sum_k s_k` independently of the trader count.
+    /// to `(1/K) sum_k s_k` independently of the trader count.
     #[default]
     Equal,
-    /// Explicit round-robin assignment `k(i) = i mod K`.
+    /// Explicit round-robin assignment `k(i) = i mod K`, so source `k` carries
+    /// weight `n_k / N_T`.
     ///
-    /// Source `k` then carries weight `n_k / N_T` where `n_k` is the number of
-    /// traders assigned to it. This coincides with [`Representation::Equal`]
-    /// whenever `N_T` is divisible by `K`, and lets a small trader population
-    /// leave some sources unread.
+    /// This coincides with [`Representation::Equal`] whenever `N_T` is
+    /// divisible by `K`, and lets a small trader population leave some sources
+    /// unread.
     RoundRobin,
 }
 
-/// How the idiosyncratic interpretation noise term is realized.
+/// The resolution at which the trader population is realized.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum InterpretationNoise {
-    /// Draw the *average* interpretation error directly.
+    /// Summarise the population by its mean belief.
     ///
     /// Because each `nu_i` is i.i.d. `N(0, sigma_nu^2)`, the average over `N_T`
-    /// traders is exactly `N(0, sigma_nu^2 / N_T)`. Drawing it in closed form
-    /// is distributionally exact, not an approximation, and makes the cost of a
-    /// realization independent of `N_T`.
+    /// traders is exactly `N(0, sigma_nu^2 / N_T)`. Drawing that average
+    /// directly is distributionally exact — not an approximation — and makes the
+    /// cost of a realization independent of `N_T`.
     #[default]
     Aggregated,
-    /// Draw every trader's `nu_i` and average them.
+    /// Materialise every trader's belief.
     ///
-    /// Used to verify the closed form above; `O(N_T)` per realization.
+    /// Produces a [`BeliefSet::CrossSection`], at `O(N_T)` per realization. Used
+    /// to verify the closed form above and available to clearing rules that need
+    /// the cross-section.
     PerTrader,
 }
 
-/// Aggregator for the trader layer.
-#[derive(Debug, Clone)]
-pub struct TraderLayer {
+/// The canonical belief model: each trader attaches to one existing source.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SourceAttachedBeliefs {
     count: usize,
     interpretation_sigma: f64,
     clientele_bias: f64,
@@ -76,8 +93,8 @@ pub struct TraderLayer {
     noise: InterpretationNoise,
 }
 
-impl TraderLayer {
-    /// Build a trader layer from a validated configuration.
+impl SourceAttachedBeliefs {
+    /// Build a belief model from a validated configuration.
     pub fn new(cfg: &TraderConfig) -> Result<Self> {
         cfg.validate()?;
         Ok(Self {
@@ -89,19 +106,13 @@ impl TraderLayer {
         })
     }
 
-    /// The trader count `N_T`.
-    #[inline]
-    pub fn count(&self) -> usize {
-        self.count
-    }
-
     /// The representation scheme in use.
     #[inline]
-    pub fn representation(&self) -> Representation {
+    pub const fn representation(&self) -> Representation {
         self.representation
     }
 
-    /// Weight placed on source `k` by the trader population.
+    /// Weight the trader population places on source `k`.
     ///
     /// Weights sum to one, so the source layer can never be amplified by adding
     /// traders.
@@ -110,76 +121,99 @@ impl TraderLayer {
         match self.representation {
             Representation::Equal => 1.0 / source_count as f64,
             Representation::RoundRobin => {
-                let base = self.count / source_count;
-                let remainder = self.count % source_count;
-                let followers = base + usize::from(k < remainder);
-                followers as f64 / self.count as f64
+                self.followers_of(k, source_count) as f64 / self.count as f64
             }
         }
     }
 
-    /// The share of the price explained by the fundamental source layer,
-    /// `sum_k w_k * s_k`.
+    /// How many traders follow source `k` under round-robin assignment.
+    #[inline]
+    fn followers_of(&self, k: usize, source_count: usize) -> usize {
+        let base = self.count / source_count;
+        let remainder = self.count % source_count;
+        base + usize::from(k < remainder)
+    }
+
+    /// The share of the mean belief explained by the fundamental source layer,
+    /// `sum_k w_k s_k`.
     ///
-    /// This is the only channel through which information about `V` reaches the
-    /// price.
-    pub fn weighted_source_component(&self, sources: &SourceDraw) -> f64 {
-        let values = sources.as_slice();
+    /// This is the only channel through which information about `V` reaches a
+    /// belief.
+    pub fn weighted_source_component(&self, sources: &SourceSet) -> f64 {
+        let signals = sources.signals();
         match self.representation {
             Representation::Equal => sources.equal_weighted_mean(),
             Representation::RoundRobin => {
-                let k = values.len();
+                let k = signals.len();
                 if k == 0 {
                     return 0.0;
                 }
-                let base = self.count / k;
-                let remainder = self.count % k;
                 let mut acc = 0.0;
-                for (idx, &s) in values.iter().enumerate() {
-                    let followers = base + usize::from(idx < remainder);
-                    acc += followers as f64 * s;
+                for (idx, signal) in signals.iter().enumerate() {
+                    acc += self.followers_of(idx, k) as f64 * signal.value();
                 }
                 acc / self.count as f64
             }
         }
     }
 
-    /// Mean interpretation error across the trader population.
-    pub fn mean_interpretation_error<R: Rng + ?Sized>(&self, rng: &mut R) -> f64 {
-        if self.interpretation_sigma == 0.0 {
-            return 0.0;
-        }
-        match self.noise {
-            InterpretationNoise::Aggregated => {
-                let z: f64 = rng.sample(StandardNormal);
-                self.interpretation_sigma * z / (self.count as f64).sqrt()
-            }
-            InterpretationNoise::PerTrader => {
-                let mut acc = 0.0;
-                for _ in 0..self.count {
-                    let z: f64 = rng.sample(StandardNormal);
-                    acc += self.interpretation_sigma * z;
-                }
-                acc / self.count as f64
-            }
-        }
-    }
-
-    /// Mean clientele distortion across the trader population.
+    /// Mean clientele distortion across the population.
     ///
-    /// The canonical model uses a common clientele tilt, so the population mean
-    /// of `b_i` is the configured bias and does not average away as `N_T`
-    /// grows.
+    /// The canonical model uses a common tilt, so this does not average away as
+    /// `N_T` grows.
     #[inline]
-    pub fn mean_clientele_bias(&self) -> f64 {
+    pub const fn mean_clientele_bias(&self) -> f64 {
         self.clientele_bias
     }
 
-    /// Population-average trader belief, `(1/N_T) * sum_i m_i`.
-    pub fn mean_belief<R: Rng + ?Sized>(&self, sources: &SourceDraw, rng: &mut R) -> f64 {
-        self.weighted_source_component(sources)
-            + self.mean_clientele_bias()
-            + self.mean_interpretation_error(rng)
+    /// Mean interpretation error across the population, drawn in closed form.
+    pub fn mean_interpretation_error<R: RngCore + ?Sized>(&self, rng: &mut R) -> f64 {
+        if self.interpretation_sigma == 0.0 {
+            return 0.0;
+        }
+        let z: f64 = rng.sample(StandardNormal);
+        self.interpretation_sigma * z / (self.count as f64).sqrt()
+    }
+}
+
+impl BeliefFormation for SourceAttachedBeliefs {
+    #[inline]
+    fn trader_count(&self) -> usize {
+        self.count
+    }
+
+    fn form<R: RngCore + ?Sized>(&self, sources: &SourceSet, rng: &mut R) -> BeliefSet {
+        match self.noise {
+            InterpretationNoise::Aggregated => BeliefSet::PopulationMean {
+                count: self.count,
+                mean: TraderBelief(
+                    self.weighted_source_component(sources)
+                        + self.mean_clientele_bias()
+                        + self.mean_interpretation_error(rng),
+                ),
+            },
+            InterpretationNoise::PerTrader => {
+                // Literal `m_i = s_{k(i)} + b_i + nu_i` under round-robin
+                // assignment, which coincides with equal representation
+                // whenever N_T is divisible by K.
+                let signals = sources.signals();
+                let k = signals.len().max(1);
+                let mut beliefs = Vec::with_capacity(self.count);
+                for i in 0..self.count {
+                    let source = signals
+                        .get(i % k)
+                        .map(|s| s.value())
+                        .unwrap_or_else(|| sources.equal_weighted_mean());
+                    let nu: f64 = if self.interpretation_sigma == 0.0 {
+                        0.0
+                    } else {
+                        self.interpretation_sigma * rng.sample::<f64, _>(StandardNormal)
+                    };
+                    beliefs.push(TraderBelief(source + self.clientele_bias + nu));
+                }
+                BeliefSet::CrossSection { beliefs }
+            }
+        }
     }
 }
 
@@ -206,8 +240,9 @@ impl TraderConfig {
 mod tests {
     use super::*;
     use crate::analytics::metrics::OnlineStats;
-    use crate::model::latent::Latent;
-    use crate::model::sources::SourceLayer;
+    use crate::config::SourceConfig;
+    use crate::model::sources::{CorrelatedFiniteSources, InformationSourceModel};
+    use crate::model::types::LatentValue;
     use crate::rng::{MASTER_SEED, StreamId, stream};
 
     fn trader_cfg(count: usize, representation: Representation) -> TraderConfig {
@@ -220,12 +255,22 @@ mod tests {
         }
     }
 
+    fn sources(k: usize) -> CorrelatedFiniteSources {
+        CorrelatedFiniteSources::new(&SourceConfig {
+            count: k,
+            sigma: 1.0,
+            correlation: 0.5,
+        })
+        .expect("valid")
+    }
+
     #[test]
     fn source_weights_sum_to_one() {
         for representation in [Representation::Equal, Representation::RoundRobin] {
             for (n, k) in [(50usize, 100usize), (2500, 10), (7, 3), (1, 4)] {
-                let layer = TraderLayer::new(&trader_cfg(n, representation)).expect("valid");
-                let total: f64 = (0..k).map(|idx| layer.source_weight(idx, k)).sum();
+                let model =
+                    SourceAttachedBeliefs::new(&trader_cfg(n, representation)).expect("valid");
+                let total: f64 = (0..k).map(|idx| model.source_weight(idx, k)).sum();
                 assert!(
                     (total - 1.0).abs() < 1e-12,
                     "weights summed to {total} for {representation:?} n={n} k={k}"
@@ -237,45 +282,79 @@ mod tests {
     #[test]
     fn round_robin_matches_equal_when_divisible() {
         let k = 10;
-        let sources_cfg = crate::config::SourceConfig {
-            count: k,
-            sigma: 1.0,
-            correlation: 0.5,
-        };
-        let sources = SourceLayer::new(&sources_cfg).expect("valid");
         let mut rng = stream(MASTER_SEED, StreamId::new("test-representation", 0, 0, 0));
-        let mut draw = SourceDraw::with_capacity(k);
-        sources.draw_into(Latent(0.3), &mut rng, &mut draw);
-
-        let equal = TraderLayer::new(&trader_cfg(2500, Representation::Equal)).expect("valid");
-        let robin = TraderLayer::new(&trader_cfg(2500, Representation::RoundRobin)).expect("valid");
+        let set = sources(k).generate(LatentValue(0.3), &mut rng);
+        let equal =
+            SourceAttachedBeliefs::new(&trader_cfg(2500, Representation::Equal)).expect("valid");
+        let robin = SourceAttachedBeliefs::new(&trader_cfg(2500, Representation::RoundRobin))
+            .expect("valid");
         assert!(
-            (equal.weighted_source_component(&draw) - robin.weighted_source_component(&draw)).abs()
+            (equal.weighted_source_component(&set) - robin.weighted_source_component(&set)).abs()
                 < 1e-12
         );
     }
 
+    /// The two belief representations must agree in distribution: the population
+    /// summary is a closed form for the cross-section's mean, not a shortcut.
     #[test]
-    fn aggregated_and_per_trader_noise_agree_in_distribution() {
-        let n = 64;
+    fn aggregated_and_cross_section_agree_in_distribution() {
+        let (n, k) = (64usize, 8usize);
+        let source_model = sources(k);
+
         let mut aggregated_cfg = trader_cfg(n, Representation::Equal);
         aggregated_cfg.noise = InterpretationNoise::Aggregated;
-        let mut per_trader_cfg = trader_cfg(n, Representation::Equal);
-        per_trader_cfg.noise = InterpretationNoise::PerTrader;
+        let mut explicit_cfg = trader_cfg(n, Representation::Equal);
+        explicit_cfg.noise = InterpretationNoise::PerTrader;
 
-        let aggregated = TraderLayer::new(&aggregated_cfg).expect("valid");
-        let per_trader = TraderLayer::new(&per_trader_cfg).expect("valid");
+        let aggregated = SourceAttachedBeliefs::new(&aggregated_cfg).expect("valid");
+        let explicit = SourceAttachedBeliefs::new(&explicit_cfg).expect("valid");
 
-        let mut rng_a = stream(MASTER_SEED, StreamId::new("test-noise", 0, 0, 0));
-        let mut rng_b = stream(MASTER_SEED, StreamId::new("test-noise", 0, 1, 0));
+        let mut rng_a = stream(MASTER_SEED, StreamId::new("test-beliefs", 0, 0, 0));
+        let mut rng_b = stream(MASTER_SEED, StreamId::new("test-beliefs", 0, 1, 0));
+        let mut set = SourceSet::with_capacity(k);
         let mut stats_a = OnlineStats::new();
         let mut stats_b = OnlineStats::new();
         for _ in 0..200_000 {
-            stats_a.push(aggregated.mean_interpretation_error(&mut rng_a));
-            stats_b.push(per_trader.mean_interpretation_error(&mut rng_b));
+            source_model.generate_into(LatentValue(0.0), &mut rng_a, &mut set);
+            let a = aggregated.form(&set, &mut rng_a);
+            stats_a.push(a.mean().value());
+
+            source_model.generate_into(LatentValue(0.0), &mut rng_b, &mut set);
+            let b = explicit.form(&set, &mut rng_b);
+            stats_b.push(b.mean().value());
+
+            assert_eq!(a.count(), n);
+            assert_eq!(b.count(), n);
         }
-        let expected = 0.8 * 0.8 / n as f64;
-        assert!((stats_a.variance() - expected).abs() < 0.1 * expected);
-        assert!((stats_b.variance() - expected).abs() < 0.1 * expected);
+        assert!(a_close(stats_a.mean(), stats_b.mean(), 0.02));
+        assert!(
+            a_close(stats_a.variance(), stats_b.variance(), 0.02),
+            "{} vs {}",
+            stats_a.variance(),
+            stats_b.variance()
+        );
+    }
+
+    fn a_close(a: f64, b: f64, tol: f64) -> bool {
+        (a - b).abs() < tol
+    }
+
+    /// The cross-section representation must be literal: with no interpretation
+    /// noise and no tilt, trader `i` holds exactly source `i mod K`.
+    #[test]
+    fn cross_section_beliefs_attach_to_individual_sources() {
+        let (n, k) = (6usize, 3usize);
+        let mut cfg = trader_cfg(n, Representation::RoundRobin);
+        cfg.interpretation_sigma = 0.0;
+        cfg.noise = InterpretationNoise::PerTrader;
+        let model = SourceAttachedBeliefs::new(&cfg).expect("valid");
+
+        let mut rng = stream(MASTER_SEED, StreamId::new("test-cross-section", 0, 0, 0));
+        let set = sources(k).generate(LatentValue(0.0), &mut rng);
+        let beliefs = model.form(&set, &mut rng);
+        let cross = beliefs.cross_section().expect("cross section");
+        for (i, belief) in cross.iter().enumerate() {
+            assert!((belief.value() - set.signals()[i % k].value()).abs() < 1e-12);
+        }
     }
 }

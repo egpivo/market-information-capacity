@@ -14,6 +14,7 @@ use crate::analytics::information_floor::{
 use crate::analytics::metrics::quantile_sorted;
 use crate::config::Config;
 use crate::error::Result;
+use crate::simulation::experiment::{Experiment, SimulationContext};
 use crate::simulation::monte_carlo::{Cell, run_world};
 
 /// Stable experiment label used for seed derivation.
@@ -160,5 +161,21 @@ mod tests {
                 row.world
             );
         }
+    }
+}
+
+/// The three-worlds experiment as an [`Experiment`].
+#[derive(Debug, Clone, Copy, Default)]
+pub struct WorldsExperiment;
+
+impl Experiment for WorldsExperiment {
+    type Output = Vec<WorldRow>;
+
+    fn name(&self) -> &'static str {
+        "worlds"
+    }
+
+    fn run(&self, ctx: &SimulationContext<'_>) -> Result<Self::Output> {
+        run(ctx.config)
     }
 }

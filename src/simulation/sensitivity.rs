@@ -18,6 +18,7 @@ use serde::Serialize;
 use crate::analytics::information_floor::{analytic_floor, analytic_pre_price_mse};
 use crate::config::{Config, PhaseSliceSpec, WorldSpec};
 use crate::error::Result;
+use crate::simulation::experiment::{Experiment, SimulationContext};
 use crate::simulation::monte_carlo::{Cell, block_summary, run_world};
 
 /// Stable experiment label for the one-factor sweeps.
@@ -86,7 +87,7 @@ pub struct PhaseRow {
 }
 
 /// Both sensitivity outputs.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Sensitivity {
     /// One-factor sweeps.
     pub sweeps: Vec<SensitivityRow>,
@@ -365,5 +366,21 @@ mod tests {
                 .all(|w| w[1].analytic_floor <= w[0].analytic_floor),
             "floor must fall as the source budget grows"
         );
+    }
+}
+
+/// The sensitivity sweeps as an [`Experiment`].
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SensitivityExperiment;
+
+impl Experiment for SensitivityExperiment {
+    type Output = Sensitivity;
+
+    fn name(&self) -> &'static str {
+        "sensitivity"
+    }
+
+    fn run(&self, ctx: &SimulationContext<'_>) -> Result<Self::Output> {
+        run(ctx.config)
     }
 }

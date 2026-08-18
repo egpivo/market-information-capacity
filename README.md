@@ -121,10 +121,73 @@ parameter of every experiment. `configs/quick.toml` runs the same experiments at
 reduced Monte Carlo scale. Both are checked against the in-code defaults by
 `tests/config_contract.rs`, so they cannot drift.
 
+## Architecture
+
+Each layer of the hierarchy is a trait, and each trait is one economic degree of
+freedom:
+
+```
+LatentProcess            what is the market trying to price?
+      │  LatentValue
+      ▼
+InformationSourceModel   how much can independently be known about it?
+      │  SourceSet
+      ▼
+BeliefFormation          how do participants interpret what is known?
+      │  BeliefSet
+      ▼
+ClearingRule             how do those views become a price?
+      │  MarketPrice
+      ▼
+RevisionRule  ◀── ExternalSignal ◀── ExternalSignalProcess
+                                         how does new information arrive?
+```
+
+### The dependency rule
+
+**Fundamental information may only be created by the source layer.**
+
+- `BeliefFormation::form` receives a `SourceSet`, **not** a `LatentValue`.
+- `ClearingRule::clear` receives a `BeliefSet`, not sources and not latent state.
+- `RevisionRule::revise` receives a `MarketPrice` and an `ExternalSignal`, not
+  latent state.
+
+This direction is deliberate, and it is why the result above cannot quietly
+break. No belief model can reach the latent value or the source generator, so no
+amount of trader growth can increase the market's fundamental information
+capacity. That was the failure of an earlier iteration of this model; it is now
+a property of the type signatures rather than of a reviewer's attention. Because
+the restriction lives in the traits, violating it means changing a trait — a
+visible, reviewable act. `tests/architecture.rs` checks the consequences.
+
+`V`, `s_k`, `m_i`, `P_OC` and the external signal are all `f64` to the machine
+and different things to an economist, so each is a distinct newtype. `revise`
+takes a `MarketPrice` and an `ExternalSignal`, not two bare floats.
+
+Composition happens in `MarketEngine`, generic over all six components with
+static dispatch, so there is no vtable in the Monte Carlo hot loop.
+`CanonicalMarket` names the composition that produces every canonical result.
+Dynamic dispatch appears in exactly one place — `Vec<Box<dyn ValidationCheck>>` —
+where the collection really is heterogeneous and is enumerated once per run.
+
+Metrics, configuration, output formats, world presets and the RNG are
+deliberately *not* behind traits. They are data and infrastructure, not economic
+degrees of freedom. In particular the three worlds are **configuration**, never
+polymorphic model types: nothing in the simulation branches on which world is
+running.
+
 ## What is in here
 
 ```
-src/model/        the information hierarchy, one module per layer
+src/model/        the hierarchy: one trait, one module, one layer
+  types.rs          domain newtypes and the containers between layers
+  latent.rs         LatentProcess          → GaussianLatent
+  sources.rs        InformationSourceModel → CorrelatedFiniteSources
+  traders.rs        BeliefFormation        → SourceAttachedBeliefs
+  clearing.rs       ClearingRule           → EqualRepresentationClearing
+  official.rs       ExternalSignalProcess  → OfficialSignalProcess
+                    RevisionRule           → FixedWeightRevision
+  market.rs         MarketEngine, CanonicalMarket
 src/analytics/    closed-form results and streaming statistics
 src/simulation/   the deterministic Monte Carlo engine and the experiments
 src/validation/   the research-integrity gate
@@ -139,6 +202,21 @@ every layer of the model, market clearing, Monte Carlo, online statistics, the
 analytic floor, all experiments, all validation, and all output. Python renders
 figures from files Rust has already written. It runs no simulation and computes
 no canonical statistic.
+
+### Extending it
+
+Adding an economic mechanism means adding one implementation of one trait:
+Student-t or regime-switching latent values, clustered or empirical sources,
+heterogeneous or attention-weighted beliefs, risk-weighted or inventory-
+constrained clearing, Bayesian or partial-adjustment revision. Nothing else
+moves. `tests/architecture.rs` demonstrates this with three implementations
+defined outside the crate.
+
+Dynamics — information arrival rates, trading arrival rates, capital
+replenishment — do **not** belong inside these traits as extra timestamp
+arguments. They belong in a future `src/dynamics/` layer that reuses these
+components unchanged. Extensibility here comes from composition, not from
+guessing future requirements in advance.
 
 ## Reproducibility
 

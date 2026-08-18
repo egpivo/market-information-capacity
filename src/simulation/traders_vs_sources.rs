@@ -14,6 +14,7 @@ use crate::analytics::information_floor::{analytic_floor, analytic_pre_price_mse
 use crate::config::{Config, MarketConfig, SourceConfig, TraderConfig};
 use crate::error::Result;
 use crate::model::traders::{InterpretationNoise, Representation};
+use crate::simulation::experiment::{Experiment, SimulationContext};
 use crate::simulation::monte_carlo::{Cell, blocked_pre_price_mse, pre_price_mse};
 
 /// Stable experiment label for the grid.
@@ -103,7 +104,7 @@ pub struct ConvergenceRow {
 }
 
 /// The three outputs of this experiment.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct TradersVsSources {
     /// The grid.
     pub grid: Vec<GridRow>,
@@ -308,5 +309,21 @@ mod tests {
             row.improvement_double_sources,
             row.improvement_double_traders
         );
+    }
+}
+
+/// The grid, doubling comparison and convergence thresholds as an [`Experiment`].
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TradersVsSourcesExperiment;
+
+impl Experiment for TradersVsSourcesExperiment {
+    type Output = TradersVsSources;
+
+    fn name(&self) -> &'static str {
+        "traders-vs-sources"
+    }
+
+    fn run(&self, ctx: &SimulationContext<'_>) -> Result<Self::Output> {
+        run(ctx.config)
     }
 }

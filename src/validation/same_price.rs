@@ -7,13 +7,13 @@ use crate::analytics::metrics::OnlineStats;
 use crate::config::Config;
 use crate::error::Result;
 use crate::simulation::monte_carlo::{Cell, run_conditional};
-use crate::validation::Check;
+use crate::validation::{Evidence, ValidationCheck, ValidationContext};
 
 /// Stable experiment label used for seed derivation.
 pub const EXPERIMENT: &str = "gate-same-price";
 
 /// Check the conditional-spread ordering across worlds.
-pub fn check_same_price(cfg: &Config) -> Result<Check> {
+fn check_same_price(cfg: &Config) -> Result<Evidence> {
     let schedule = cfg.batch_schedule(cfg.validation.same_price_realizations);
     let band = cfg.same_price.band;
     let mut rows = Vec::new();
@@ -56,9 +56,23 @@ pub fn check_same_price(cfg: &Config) -> Result<Check> {
         .iter()
         .map(|(_, (name, n, sd))| format!("{name}: sd {sd:.3} (n={n})"))
         .collect();
-    Ok(Check::new(
-        "same-price conditional",
+    Ok(Evidence::new(
         widening && enough,
         format!("band |P_OC| < {band}; {}", summary.join(", ")),
     ))
+}
+
+/// Gate: conditional spread widens as information capacity thins.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SamePriceConditional;
+
+impl ValidationCheck for SamePriceConditional {
+    fn name(&self) -> &'static str {
+        "same-price conditional"
+    }
+
+    fn run(&self, ctx: &ValidationContext<'_>) -> Result<Evidence> {
+        let _ = ctx;
+        check_same_price(ctx.config)
+    }
 }

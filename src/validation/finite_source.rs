@@ -6,7 +6,7 @@ use crate::config::{Config, MarketConfig, SourceConfig, TraderConfig};
 use crate::error::Result;
 use crate::model::traders::{InterpretationNoise, Representation};
 use crate::simulation::monte_carlo::{Cell, pre_price_mse};
-use crate::validation::Check;
+use crate::validation::{Evidence, ValidationCheck, ValidationContext};
 
 /// Stable experiment label used for seed derivation.
 pub const EXPERIMENT: &str = "gate-finite-source";
@@ -30,7 +30,7 @@ fn market(k: usize, n_traders: usize, rho_s: f64, sigma_nu: f64) -> MarketConfig
 }
 
 /// Check that Monte Carlo price MSE matches `floor + sigma_nu^2 / N_T`.
-pub fn check_floor_parity(cfg: &Config) -> Result<Check> {
+fn check_floor_parity(cfg: &Config) -> Result<Evidence> {
     let schedule = cfg.batch_schedule(cfg.validation.realizations);
     let sigma_nu = 0.15;
     let mut worst: Option<(usize, f64, f64)> = None;
@@ -56,8 +56,7 @@ pub fn check_floor_parity(cfg: &Config) -> Result<Check> {
         }
     }
     let (k, rho_s, z) = worst.unwrap_or((0, 0.0, f64::NAN));
-    Ok(Check::new(
-        "monte carlo floor parity",
+    Ok(Evidence::new(
         failures == 0,
         format!(
             "{cells} cells; largest deviation {z:.2} SE at K={k}, rho_s={rho_s} (tolerance {:.1} SE)",
@@ -68,7 +67,7 @@ pub fn check_floor_parity(cfg: &Config) -> Result<Check> {
 
 /// Check that a fixed source budget produces a plateau: growing `N_T` by three
 /// orders of magnitude leaves the price error pinned above the floor.
-pub fn check_plateau(cfg: &Config) -> Result<Check> {
+fn check_plateau(cfg: &Config) -> Result<Evidence> {
     let (k, rho_s) = (10usize, 0.5);
     let floor = analytic_floor(k, rho_s, 1.0);
     let schedule = cfg.batch_schedule(cfg.validation.realizations);
@@ -92,8 +91,7 @@ pub fn check_plateau(cfg: &Config) -> Result<Check> {
         .iter()
         .map(|(n, mse, _)| format!("N_T={n}: {mse:.4}"))
         .collect();
-    Ok(Check::new(
-        "finite-source plateau",
+    Ok(Evidence::new(
         above_floor && flattened,
         format!(
             "floor {floor:.4}; {}; relative gap at N_T={largest_n} is {:.3}",
@@ -105,7 +103,7 @@ pub fn check_plateau(cfg: &Config) -> Result<Check> {
 
 /// Check the source-count comparative static, and that at high trader density
 /// doubling sources beats doubling traders.
-pub fn check_source_comparative_static(cfg: &Config) -> Result<Check> {
+fn check_source_comparative_static(cfg: &Config) -> Result<Evidence> {
     let rho_s = 0.5;
     let n_traders = 5_000;
     let schedule = cfg.batch_schedule(cfg.validation.realizations);
@@ -137,12 +135,57 @@ pub fn check_source_comparative_static(cfg: &Config) -> Result<Check> {
         .iter()
         .map(|(k, mse, _)| format!("K={k}: {mse:.4}"))
         .collect();
-    Ok(Check::new(
-        "source-count comparative static",
+    Ok(Evidence::new(
         separated && sources_win,
         format!(
             "{}; at N_T={n_traders}, doubling sources gains {gain_sources:.4} vs {gain_traders:.4} from doubling traders (diff SE {se_diff:.4})",
             summary.join(", ")
         ),
     ))
+}
+
+/// Gate: simulated price MSE matches `floor + sigma_nu^2 / N_T`.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct MonteCarloFloorParity;
+
+impl ValidationCheck for MonteCarloFloorParity {
+    fn name(&self) -> &'static str {
+        "monte carlo floor parity"
+    }
+
+    fn run(&self, ctx: &ValidationContext<'_>) -> Result<Evidence> {
+        let _ = ctx;
+        check_floor_parity(ctx.config)
+    }
+}
+
+/// Gate: a fixed source budget produces a plateau as `N_T` grows.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct FiniteSourcePlateau;
+
+impl ValidationCheck for FiniteSourcePlateau {
+    fn name(&self) -> &'static str {
+        "finite-source plateau"
+    }
+
+    fn run(&self, ctx: &ValidationContext<'_>) -> Result<Evidence> {
+        let _ = ctx;
+        check_plateau(ctx.config)
+    }
+}
+
+/// Gate: MSE separates by source budget, and at high trader density doubling
+/// sources beats doubling traders.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SourceCountComparativeStatic;
+
+impl ValidationCheck for SourceCountComparativeStatic {
+    fn name(&self) -> &'static str {
+        "source-count comparative static"
+    }
+
+    fn run(&self, ctx: &ValidationContext<'_>) -> Result<Evidence> {
+        let _ = ctx;
+        check_source_comparative_static(ctx.config)
+    }
 }

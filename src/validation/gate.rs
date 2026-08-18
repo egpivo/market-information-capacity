@@ -8,7 +8,8 @@ use serde::Serialize;
 use crate::config::Config;
 use crate::error::Result;
 use crate::validation::{
-    Check, analytic_floor, determinism, fast_follower, finite_source, hierarchy, same_price,
+    Check, ValidationCheck, ValidationContext, analytic_floor, determinism, fast_follower,
+    finite_source, hierarchy, same_price,
 };
 
 /// The full gate outcome.
@@ -61,19 +62,41 @@ impl GateReport {
     }
 }
 
+/// The canonical gate, in report order.
+///
+/// Adding a gate means adding one value to this list. The report order is the
+/// list order, and it runs from structural checks through analytic identities to
+/// economic mechanisms.
+pub fn canonical_checks() -> Vec<Box<dyn ValidationCheck>> {
+    vec![
+        Box::new(hierarchy::HierarchyIntact),
+        Box::new(hierarchy::TraderDuplicationIsNotInformation),
+        Box::new(analytic_floor::AnalyticFloorIdentities),
+        Box::new(finite_source::MonteCarloFloorParity),
+        Box::new(finite_source::FiniteSourcePlateau),
+        Box::new(finite_source::SourceCountComparativeStatic),
+        Box::new(fast_follower::FastFollowerMechanism),
+        Box::new(same_price::SamePriceConditional),
+        Box::new(determinism::DeterministicReproduction),
+    ]
+}
+
 /// Run every validation check.
 pub fn run_gate(cfg: &Config) -> Result<GateReport> {
-    let checks = vec![
-        hierarchy::check_hierarchy(cfg)?,
-        hierarchy::check_trader_duplication(cfg)?,
-        analytic_floor::check_analytic_floor()?,
-        finite_source::check_floor_parity(cfg)?,
-        finite_source::check_plateau(cfg)?,
-        finite_source::check_source_comparative_static(cfg)?,
-        fast_follower::check_fast_follower(cfg)?,
-        same_price::check_same_price(cfg)?,
-        determinism::check_determinism(cfg)?,
-    ];
+    run_checks(cfg, &canonical_checks())
+}
+
+/// Run a specific list of checks.
+pub fn run_checks(cfg: &Config, checks: &[Box<dyn ValidationCheck>]) -> Result<GateReport> {
+    let ctx = ValidationContext::new(cfg);
+    let checks = checks
+        .iter()
+        .map(|check| {
+            check
+                .run(&ctx)
+                .map(|evidence| Check::from_evidence(check.name(), evidence))
+        })
+        .collect::<Result<Vec<_>>>()?;
     let passed = checks.iter().all(Check::passed);
     Ok(GateReport {
         master_seed: cfg.master_seed,
@@ -86,7 +109,7 @@ pub fn run_gate(cfg: &Config) -> Result<GateReport> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::validation::CheckStatus;
+    use crate::validation::{CheckStatus, Evidence};
 
     #[test]
     fn render_marks_failures() {
@@ -105,5 +128,36 @@ mod tests {
         assert!(text.contains("measured 3, expected 4"));
         assert!(text.contains("MODEL_GATE: FAIL"));
         assert_eq!(report.checks[1].status, CheckStatus::Fail);
+    }
+
+    #[test]
+    fn the_canonical_gate_lists_every_check_once() {
+        let checks = canonical_checks();
+        assert_eq!(checks.len(), 9);
+        let mut names: Vec<&str> = checks.iter().map(|c| c.name()).collect();
+        let count = names.len();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(names.len(), count, "duplicate check names in the gate");
+    }
+
+    /// A gate that cannot fail is not a gate: a check reporting failure must
+    /// propagate to the report.
+    #[test]
+    fn a_failing_check_fails_the_report() {
+        struct AlwaysFails;
+        impl ValidationCheck for AlwaysFails {
+            fn name(&self) -> &'static str {
+                "always fails"
+            }
+            fn run(&self, _ctx: &ValidationContext<'_>) -> Result<Evidence> {
+                Ok(Evidence::new(false, "by construction"))
+            }
+        }
+        let cfg = Config::quick();
+        let checks: Vec<Box<dyn ValidationCheck>> = vec![Box::new(AlwaysFails)];
+        let report = run_checks(&cfg, &checks).expect("runs");
+        assert!(!report.passed);
+        assert!(report.render().contains("MODEL_GATE: FAIL"));
     }
 }

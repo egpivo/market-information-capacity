@@ -6,10 +6,10 @@
 
 use crate::analytics::information_floor::analytic_floor;
 use crate::error::Result;
-use crate::validation::Check;
+use crate::validation::{Evidence, ValidationCheck, ValidationContext};
 
 /// Check the closed-form identities and comparative statics of the floor.
-pub fn check_analytic_floor() -> Result<Check> {
+fn check_analytic_floor() -> Result<Evidence> {
     let mut failures = Vec::new();
 
     // Independent sources: the floor is sigma_s^2 / K.
@@ -56,9 +56,21 @@ pub fn check_analytic_floor() -> Result<Check> {
     } else {
         failures.join("; ")
     };
-    Ok(Check::new(
-        "analytic source floor",
-        failures.is_empty(),
-        detail,
-    ))
+    Ok(Evidence::new(failures.is_empty(), detail))
+}
+
+/// Gate: the analytic floor satisfies its closed-form identities and
+/// comparative statics.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct AnalyticFloorIdentities;
+
+impl ValidationCheck for AnalyticFloorIdentities {
+    fn name(&self) -> &'static str {
+        "analytic source floor"
+    }
+
+    fn run(&self, ctx: &ValidationContext<'_>) -> Result<Evidence> {
+        let _ = ctx;
+        check_analytic_floor()
+    }
 }

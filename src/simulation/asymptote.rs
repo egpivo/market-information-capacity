@@ -12,6 +12,7 @@ use crate::config::{Config, MarketConfig, SourceConfig, TraderConfig};
 use crate::error::Result;
 use crate::model::traders::{InterpretationNoise, Representation};
 use crate::rng::{StreamId, derive_seed};
+use crate::simulation::experiment::{Experiment, SimulationContext};
 use crate::simulation::monte_carlo::{Cell, pre_price_mse};
 
 /// Stable experiment label used for seed derivation.
@@ -120,5 +121,21 @@ mod tests {
                 expected
             );
         }
+    }
+}
+
+/// The finite-source asymptote benchmark as an [`Experiment`].
+#[derive(Debug, Clone, Copy, Default)]
+pub struct AsymptoteExperiment;
+
+impl Experiment for AsymptoteExperiment {
+    type Output = Vec<AsymptoteRow>;
+
+    fn name(&self) -> &'static str {
+        "asymptote"
+    }
+
+    fn run(&self, ctx: &SimulationContext<'_>) -> Result<Self::Output> {
+        run(ctx.config)
     }
 }

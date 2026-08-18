@@ -1,48 +1,104 @@
-//! The official signal that arrives after the pre-official trading window.
+//! External information and how the market uses it.
 //!
-//! The onchain market prices `V` before any external anchor exists. The
-//! official signal is a *genuinely new* draw about `V`,
-//!
-//! ```text
-//! official = V + sigma_o * epsilon,
-//! ```
-//!
-//! and the post-boundary price is a fixed-weight revision of the pre-official
-//! price toward it:
+//! Two separate questions live here, and the module keeps them separate because
+//! conflating them is how a mechanical rule gets mistaken for an optimal one:
 //!
 //! ```text
-//! P_post = (1 - w) * P_pre + w * official.
+//! ExternalSignalProcess   what new information does the outside world produce?
+//!         |
+//!         v  ExternalSignal
+//! RevisionRule            how does the market assimilate it?
 //! ```
 //!
-//! This is a mechanical revision rule, **not** an optimal Bayesian update. The
-//! weight `w` is a configured parameter. Consequently a market whose
-//! pre-official price is already accurate can be made *worse* by the revision
-//! (the Informative world in the canonical run is exactly this case), and the
-//! repository makes no claim that official information always improves price
-//! quality.
+//! The canonical model pairs a genuinely new draw about `V` with a
+//! **fixed-weight** revision. That revision is *not* a Bayesian update, so a
+//! market whose pre-official price is already accurate can be made worse by it.
+//! The canonical Informative world is exactly that case. When the post-boundary
+//! MSE rises, the reading is that the assimilation rule is not optimal — not
+//! that the external information was harmful.
 
-use rand::Rng;
+use rand::{Rng, RngCore};
 use rand_distr::StandardNormal;
 
 use crate::config::OfficialSignalConfig;
 use crate::error::{Error, Result};
-use crate::model::latent::Latent;
+use crate::model::types::{ExternalSignal, LatentValue, MarketPrice};
 
-/// Draw the official signal about the latent value.
-#[inline]
-pub fn draw_official<R: Rng + ?Sized>(
-    latent: Latent,
-    cfg: &OfficialSignalConfig,
-    rng: &mut R,
-) -> f64 {
-    let z: f64 = rng.sample(StandardNormal);
-    latent.value() + cfg.sigma * z
+/// A process generating information about the latent value from outside the
+/// market.
+pub trait ExternalSignalProcess {
+    /// Draw one external signal.
+    fn generate<R: RngCore + ?Sized>(&self, latent: LatentValue, rng: &mut R) -> ExternalSignal;
 }
 
-/// Apply the fixed-weight revision toward the official signal.
-#[inline]
-pub fn revise(pre_price: f64, official: f64, weight: f64) -> f64 {
-    (1.0 - weight) * pre_price + weight * official
+/// A rule for assimilating an external signal into the price.
+pub trait RevisionRule {
+    /// Revise the pre-boundary price given the external signal.
+    fn revise(&self, pre_price: MarketPrice, external: ExternalSignal) -> MarketPrice;
+}
+
+/// The canonical external signal: `S = V + sigma_o * epsilon`.
+///
+/// This is *new* information — an independent draw about `V`, not a function of
+/// anything the market already knew.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct OfficialSignalProcess {
+    sigma: f64,
+}
+
+impl OfficialSignalProcess {
+    /// Build the process from a validated configuration.
+    pub fn new(cfg: &OfficialSignalConfig) -> Result<Self> {
+        cfg.validate()?;
+        Ok(Self { sigma: cfg.sigma })
+    }
+
+    /// The signal error scale `sigma_o`.
+    #[inline]
+    pub const fn sigma(&self) -> f64 {
+        self.sigma
+    }
+}
+
+impl ExternalSignalProcess for OfficialSignalProcess {
+    #[inline]
+    fn generate<R: RngCore + ?Sized>(&self, latent: LatentValue, rng: &mut R) -> ExternalSignal {
+        let z: f64 = rng.sample(StandardNormal);
+        ExternalSignal(latent.value() + self.sigma * z)
+    }
+}
+
+/// The canonical revision rule: a fixed-weight move toward the external signal.
+///
+/// ```text
+/// P_post = (1 - w) P_pre + w S.
+/// ```
+///
+/// `w` is a configured parameter, deliberately not an optimal Bayesian weight.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FixedWeightRevision {
+    weight: f64,
+}
+
+impl FixedWeightRevision {
+    /// Build the rule from a validated configuration.
+    pub fn new(cfg: &OfficialSignalConfig) -> Result<Self> {
+        cfg.validate()?;
+        Ok(Self { weight: cfg.weight })
+    }
+
+    /// The revision weight `w`.
+    #[inline]
+    pub const fn weight(&self) -> f64 {
+        self.weight
+    }
+}
+
+impl RevisionRule for FixedWeightRevision {
+    #[inline]
+    fn revise(&self, pre_price: MarketPrice, external: ExternalSignal) -> MarketPrice {
+        MarketPrice((1.0 - self.weight) * pre_price.value() + self.weight * external.value())
+    }
 }
 
 impl OfficialSignalConfig {
@@ -68,11 +124,21 @@ impl OfficialSignalConfig {
 mod tests {
     use super::*;
 
+    fn rule(weight: f64) -> FixedWeightRevision {
+        FixedWeightRevision::new(&OfficialSignalConfig {
+            sigma: 0.35,
+            weight,
+        })
+        .expect("valid")
+    }
+
     #[test]
-    fn revision_interpolates() {
-        assert!((revise(1.0, 3.0, 0.0) - 1.0).abs() < 1e-12);
-        assert!((revise(1.0, 3.0, 1.0) - 3.0).abs() < 1e-12);
-        assert!((revise(1.0, 3.0, 0.5) - 2.0).abs() < 1e-12);
+    fn revision_interpolates_between_price_and_signal() {
+        let pre = MarketPrice(1.0);
+        let signal = ExternalSignal(3.0);
+        assert!((rule(0.0).revise(pre, signal).value() - 1.0).abs() < 1e-12);
+        assert!((rule(1.0).revise(pre, signal).value() - 3.0).abs() < 1e-12);
+        assert!((rule(0.5).revise(pre, signal).value() - 2.0).abs() < 1e-12);
     }
 
     #[test]

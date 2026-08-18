@@ -8,7 +8,7 @@ use crate::config::{Config, MarketConfig, SourceConfig, TraderConfig};
 use crate::error::Result;
 use crate::model::traders::{InterpretationNoise, Representation};
 use crate::simulation::monte_carlo::{Cell, pre_price_mse};
-use crate::validation::Check;
+use crate::validation::{Evidence, ValidationCheck, ValidationContext};
 
 /// Stable experiment label used for seed derivation.
 pub const EXPERIMENT: &str = "gate-determinism";
@@ -32,7 +32,7 @@ fn market() -> MarketConfig {
 }
 
 /// Check bitwise reproduction under a fixed seed and sensitivity to the seed.
-pub fn check_determinism(cfg: &Config) -> Result<Check> {
+fn check_determinism(cfg: &Config) -> Result<Evidence> {
     let schedule = cfg.batch_schedule(cfg.validation.realizations);
     let market = market();
     let cell = Cell::new(cfg.master_seed, EXPERIMENT, 0, &schedule);
@@ -48,8 +48,7 @@ pub fn check_determinism(cfg: &Config) -> Result<Check> {
         && first.count() == second.count();
     let seed_matters = other_seed.mean().to_bits() != first.mean().to_bits();
 
-    Ok(Check::new(
-        "deterministic reproduction",
+    Ok(Evidence::new(
         reproduces && seed_matters,
         format!(
             "seed {} reproduces MSE {:.12} bitwise over {} realizations in {} batches; seed {} gives {:.12}",
@@ -61,4 +60,20 @@ pub fn check_determinism(cfg: &Config) -> Result<Check> {
             other_seed.mean()
         ),
     ))
+}
+
+/// Gate: the same seed and configuration reproduce the same numbers, and a
+/// different seed does not.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DeterministicReproduction;
+
+impl ValidationCheck for DeterministicReproduction {
+    fn name(&self) -> &'static str {
+        "deterministic reproduction"
+    }
+
+    fn run(&self, ctx: &ValidationContext<'_>) -> Result<Evidence> {
+        let _ = ctx;
+        check_determinism(ctx.config)
+    }
 }

@@ -2,6 +2,10 @@
 //!
 //! The CLI is a thin shell over this module, so every command is callable from
 //! a test or another program without going through `main`.
+//!
+//! Experiments are invoked through the [`Experiment`] trait and the gate through
+//! [`ValidationCheck`](crate::validation::ValidationCheck); this module owns only
+//! the question of where the results land.
 
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -12,7 +16,11 @@ use serde_json::json;
 use crate::config::Config;
 use crate::error::Result;
 use crate::output::{write_json, write_rows};
-use crate::simulation::{asymptote, same_price, sensitivity, traders_vs_sources, worlds};
+use crate::simulation::experiment::{Experiment, SimulationContext};
+use crate::simulation::{
+    AsymptoteExperiment, SamePriceExperiment, SensitivityExperiment, TradersVsSourcesExperiment,
+    WorldsExperiment,
+};
 use crate::validation::{GateReport, run_gate};
 
 /// File names of the canonical result files.
@@ -63,7 +71,7 @@ fn path(out_dir: &Path, name: &str) -> PathBuf {
 /// Run the finite-source asymptote benchmark and write its CSV.
 pub fn run_asymptote(cfg: &Config, out_dir: &Path) -> Result<RunSummary> {
     let start = Instant::now();
-    let rows = asymptote::run(cfg)?;
+    let rows = AsymptoteExperiment.run(&SimulationContext::new(cfg))?;
     write_rows(path(out_dir, files::ASYMPTOTE), &rows)?;
     let worst = rows.iter().map(|r| r.z_gap.abs()).fold(0.0f64, f64::max);
     Ok(RunSummary {
@@ -83,7 +91,7 @@ pub fn run_asymptote(cfg: &Config, out_dir: &Path) -> Result<RunSummary> {
 /// Run the grid, doubling comparison and convergence thresholds.
 pub fn run_traders_vs_sources(cfg: &Config, out_dir: &Path) -> Result<RunSummary> {
     let start = Instant::now();
-    let result = traders_vs_sources::run(cfg)?;
+    let result = TradersVsSourcesExperiment.run(&SimulationContext::new(cfg))?;
     write_rows(path(out_dir, files::GRID), &result.grid)?;
     write_rows(path(out_dir, files::DOUBLING), &result.doubling)?;
     write_rows(path(out_dir, files::CONVERGENCE), &result.convergence)?;
@@ -119,7 +127,7 @@ pub fn run_traders_vs_sources(cfg: &Config, out_dir: &Path) -> Result<RunSummary
 /// Run the three-worlds experiment.
 pub fn run_worlds(cfg: &Config, out_dir: &Path) -> Result<RunSummary> {
     let start = Instant::now();
-    let rows = worlds::run(cfg)?;
+    let rows = WorldsExperiment.run(&SimulationContext::new(cfg))?;
     write_rows(path(out_dir, files::WORLDS), &rows)?;
     let summary: Vec<_> = rows
         .iter()
@@ -145,7 +153,7 @@ pub fn run_worlds(cfg: &Config, out_dir: &Path) -> Result<RunSummary> {
 /// Run the same-price conditional experiment.
 pub fn run_same_price(cfg: &Config, out_dir: &Path) -> Result<RunSummary> {
     let start = Instant::now();
-    let rows = same_price::run(cfg)?;
+    let rows = SamePriceExperiment.run(&SimulationContext::new(cfg))?;
     write_rows(path(out_dir, files::SAME_PRICE), &rows)?;
     let summary: Vec<_> = rows
         .iter()
@@ -173,7 +181,7 @@ pub fn run_same_price(cfg: &Config, out_dir: &Path) -> Result<RunSummary> {
 /// Run the sensitivity sweeps.
 pub fn run_sensitivity(cfg: &Config, out_dir: &Path) -> Result<RunSummary> {
     let start = Instant::now();
-    let result = sensitivity::run(cfg)?;
+    let result = SensitivityExperiment.run(&SimulationContext::new(cfg))?;
     write_rows(path(out_dir, files::SENSITIVITY), &result.sweeps)?;
     write_rows(path(out_dir, files::PHASE), &result.phase)?;
     Ok(RunSummary {

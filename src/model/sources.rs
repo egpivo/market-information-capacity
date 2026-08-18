@@ -1,81 +1,70 @@
 //! The fundamental source layer.
 //!
-//! This module owns the *only* place in the crate where new fundamental
-//! information about `V` is created. Source `k` is
+//! This module owns the **only** place in the crate where new information about
+//! `V` is created. Every implementation of [`InformationSourceModel`] takes the
+//! latent value and returns exactly `K` fundamental signals; `K` is the source
+//! budget, a property of the information environment, and no signature here
+//! mentions a trader count.
 //!
-//! ```text
-//! s_k = V + sigma_s * ( sqrt(rho_s) * u + sqrt(1 - rho_s) * eta_k )
-//! ```
-//!
-//! where `u` is a single common source error shared by every source in a
-//! realization and `eta_k` is source specific. The number of source draws is
-//! `K`, the *source budget*. It is a property of the information environment,
-//! never of the trader population: [`SourceLayer::count`] does not take a
-//! trader count and [`SourceDraw`] always has exactly `K` entries.
+//! This is the information-capacity seam. Changing how much a market can know
+//! means writing another implementation of this trait; it never means changing
+//! anything downstream.
 
-use rand::Rng;
+use rand::{Rng, RngCore};
 use rand_distr::StandardNormal;
 
 use crate::config::SourceConfig;
 use crate::error::{Error, Result};
-use crate::model::latent::Latent;
+use crate::model::types::{FundamentalSignal, LatentValue, SourceSet};
 
-/// One realization of the fundamental source vector `(s_1, ..., s_K)`.
+/// A model of the fundamental information available about the latent value.
+pub trait InformationSourceModel {
+    /// The source budget `K`: how many independent fundamental draws exist.
+    fn source_count(&self) -> usize;
+
+    /// Generate the source vector into a reusable buffer.
+    ///
+    /// This is the required method because it is the one the Monte Carlo hot
+    /// loop calls; `out` is cleared first and receives exactly
+    /// [`source_count`](Self::source_count) signals.
+    fn generate_into<R: RngCore + ?Sized>(
+        &self,
+        latent: LatentValue,
+        rng: &mut R,
+        out: &mut SourceSet,
+    );
+
+    /// Generate the source vector, allocating.
+    ///
+    /// Convenience for tests and one-off calls; experiments use
+    /// [`generate_into`](Self::generate_into).
+    fn generate<R: RngCore + ?Sized>(&self, latent: LatentValue, rng: &mut R) -> SourceSet {
+        let mut out = SourceSet::with_capacity(self.source_count());
+        self.generate_into(latent, rng, &mut out);
+        out
+    }
+}
+
+/// The canonical source model: finitely many sources with correlated errors.
 ///
-/// The buffer is reused across Monte Carlo realizations to keep the simulation
-/// allocation free in its hot loop.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct SourceDraw {
-    values: Vec<f64>,
-}
-
-impl SourceDraw {
-    /// Allocate a draw buffer for `k` sources.
-    pub fn with_capacity(k: usize) -> Self {
-        Self {
-            values: Vec::with_capacity(k),
-        }
-    }
-
-    /// Number of fundamental sources in this draw. Always equals `K`.
-    #[inline]
-    pub fn len(&self) -> usize {
-        self.values.len()
-    }
-
-    /// Whether the draw is empty. A validated configuration never produces one.
-    #[inline]
-    pub fn is_empty(&self) -> bool {
-        self.values.is_empty()
-    }
-
-    /// The source values.
-    #[inline]
-    pub fn as_slice(&self) -> &[f64] {
-        &self.values
-    }
-
-    /// Equal-weighted mean of the sources, `(1/K) * sum_k s_k`.
-    #[inline]
-    pub fn equal_weighted_mean(&self) -> f64 {
-        if self.values.is_empty() {
-            return 0.0;
-        }
-        self.values.iter().sum::<f64>() / self.values.len() as f64
-    }
-}
-
-/// Generator for the fundamental source layer.
-#[derive(Debug, Clone)]
-pub struct SourceLayer {
+/// ```text
+/// s_k = V + sigma_s ( sqrt(rho_s) u + sqrt(1 - rho_s) eta_k )
+/// ```
+///
+/// `u` is drawn once per realization and shared by every source; `eta_k` is
+/// source specific. Each source error therefore has variance `sigma_s^2` and
+/// pairwise correlation `rho_s`. Setting `rho_s = 0` gives the
+/// independent-source special case.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CorrelatedFiniteSources {
     count: usize,
     sigma: f64,
     sqrt_rho: f64,
     sqrt_one_minus_rho: f64,
 }
 
-impl SourceLayer {
-    /// Build a source layer from a validated configuration.
+impl CorrelatedFiniteSources {
+    /// Build a source model from a validated configuration.
     pub fn new(cfg: &SourceConfig) -> Result<Self> {
         cfg.validate()?;
         Ok(Self {
@@ -86,25 +75,33 @@ impl SourceLayer {
         })
     }
 
-    /// The source budget `K`.
+    /// The source error scale `sigma_s`.
     #[inline]
-    pub fn count(&self) -> usize {
+    pub const fn sigma(&self) -> f64 {
+        self.sigma
+    }
+}
+
+impl InformationSourceModel for CorrelatedFiniteSources {
+    #[inline]
+    fn source_count(&self) -> usize {
         self.count
     }
 
-    /// Draw `(s_1, ..., s_K)` for one realization of the latent value.
-    ///
-    /// The draw is written into `out`, which is cleared first. Exactly `K`
-    /// values are produced regardless of how many traders will read them.
-    pub fn draw_into<R: Rng + ?Sized>(&self, latent: Latent, rng: &mut R, out: &mut SourceDraw) {
+    fn generate_into<R: RngCore + ?Sized>(
+        &self,
+        latent: LatentValue,
+        rng: &mut R,
+        out: &mut SourceSet,
+    ) {
         let common: f64 = rng.sample(StandardNormal);
         let shared = latent.value() + self.sigma * self.sqrt_rho * common;
-        out.values.clear();
-        out.values.reserve(self.count);
+        out.reset(self.count);
         for _ in 0..self.count {
             let specific: f64 = rng.sample(StandardNormal);
-            out.values
-                .push(shared + self.sigma * self.sqrt_one_minus_rho * specific);
+            out.push(FundamentalSignal(
+                shared + self.sigma * self.sqrt_one_minus_rho * specific,
+            ));
         }
     }
 }
@@ -146,29 +143,28 @@ mod tests {
     }
 
     #[test]
-    fn draw_always_has_exactly_k_entries() {
+    fn generated_set_always_has_exactly_k_signals() {
         for k in [1usize, 2, 10, 100] {
-            let layer = SourceLayer::new(&cfg(k, 1.0, 0.5)).expect("valid config");
+            let model = CorrelatedFiniteSources::new(&cfg(k, 1.0, 0.5)).expect("valid config");
             let mut rng = stream(MASTER_SEED, StreamId::new("test-sources", k as u64, 0, 0));
-            let mut draw = SourceDraw::with_capacity(k);
-            layer.draw_into(Latent(0.0), &mut rng, &mut draw);
-            assert_eq!(draw.len(), k);
+            assert_eq!(model.source_count(), k);
+            assert_eq!(model.generate(LatentValue(0.0), &mut rng).len(), k);
         }
     }
 
     #[test]
     fn source_error_has_requested_variance_and_correlation() {
         let (k, sigma, rho) = (2usize, 1.3, 0.4);
-        let layer = SourceLayer::new(&cfg(k, sigma, rho)).expect("valid config");
+        let model = CorrelatedFiniteSources::new(&cfg(k, sigma, rho)).expect("valid config");
         let mut rng = stream(MASTER_SEED, StreamId::new("test-source-moments", 0, 0, 0));
-        let mut draw = SourceDraw::with_capacity(k);
+        let mut set = SourceSet::with_capacity(k);
         let mut var = OnlineStats::new();
         let mut cross = OnlineStats::new();
         for _ in 0..400_000 {
-            layer.draw_into(Latent(0.0), &mut rng, &mut draw);
-            let s = draw.as_slice();
-            var.push(s[0] * s[0]);
-            cross.push(s[0] * s[1]);
+            model.generate_into(LatentValue(0.0), &mut rng, &mut set);
+            let s = set.signals();
+            var.push(s[0].value() * s[0].value());
+            cross.push(s[0].value() * s[1].value());
         }
         let expected_var = sigma * sigma;
         assert!(
@@ -185,9 +181,22 @@ mod tests {
     }
 
     #[test]
+    fn allocating_and_in_place_generation_agree() {
+        let model = CorrelatedFiniteSources::new(&cfg(5, 1.0, 0.3)).expect("valid config");
+        let mut rng_a = stream(MASTER_SEED, StreamId::new("test-source-api", 0, 0, 0));
+        let mut rng_b = stream(MASTER_SEED, StreamId::new("test-source-api", 0, 0, 0));
+        let mut buffer = SourceSet::with_capacity(5);
+        for _ in 0..100 {
+            let allocated = model.generate(LatentValue(0.25), &mut rng_a);
+            model.generate_into(LatentValue(0.25), &mut rng_b, &mut buffer);
+            assert_eq!(allocated, buffer);
+        }
+    }
+
+    #[test]
     fn invalid_configs_are_rejected() {
-        assert!(SourceLayer::new(&cfg(0, 1.0, 0.5)).is_err());
-        assert!(SourceLayer::new(&cfg(2, -1.0, 0.5)).is_err());
-        assert!(SourceLayer::new(&cfg(2, 1.0, 1.5)).is_err());
+        assert!(CorrelatedFiniteSources::new(&cfg(0, 1.0, 0.5)).is_err());
+        assert!(CorrelatedFiniteSources::new(&cfg(2, -1.0, 0.5)).is_err());
+        assert!(CorrelatedFiniteSources::new(&cfg(2, 1.0, 1.5)).is_err());
     }
 }
