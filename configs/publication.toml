@@ -1,0 +1,227 @@
+# Canonical publication-scale configuration for market-information-capacity.
+#
+# This file is the machine-readable statement of every canonical experiment.
+# It is byte-for-byte equivalent to `Config::publication()` in src/config.rs;
+# tests/config_contract.rs enforces that equivalence, so editing one without
+# the other fails the build.
+#
+# Any section may be omitted, in which case the canonical value is used.
+# `configs/quick.toml` is the same experiment set at reduced Monte Carlo scale.
+
+master_seed = 20260915
+batches = 16
+
+[official]
+sigma = 0.35
+weight = 0.8
+
+[asymptote]
+k_values = [
+    2,
+    10,
+    50,
+]
+rho_values = [
+    0.0,
+    0.5,
+    0.9,
+]
+trader_values = [
+    1000,
+    5000,
+]
+sigma_s = 1.0
+interpretation_sigma = 0.15
+clientele_bias = 0.0
+realizations = 100000
+
+[grid]
+trader_values = [
+    50,
+    100,
+    250,
+    500,
+    1000,
+    2500,
+    5000,
+]
+k_values = [
+    1,
+    2,
+    5,
+    10,
+    25,
+    50,
+    100,
+]
+rho_s = 0.5
+sigma_s = 1.0
+interpretation_sigma = 0.8
+clientele_bias = 0.0
+realizations_per_block = 5000
+blocks = 3
+convergence_gaps = [
+    0.05,
+    0.01,
+]
+convergence_k_values = [
+    2,
+    10,
+    50,
+]
+
+[doubling]
+k_sources = 10
+rho_s = 0.5
+sigma_s = 1.0
+interpretation_sigma = 0.8
+realizations = 100000
+
+[[doubling.densities]]
+label = "low"
+traders = 100
+
+[[doubling.densities]]
+label = "medium"
+traders = 1000
+
+[[doubling.densities]]
+label = "high"
+traders = 5000
+
+[worlds]
+realizations = 30000
+revision_samples = 200000
+
+[[worlds.presets]]
+name = "Informative"
+traders = 2500
+sources = 50
+rho_s = 0.1
+sigma_s = 0.45
+clientele_bias = 0.05
+interpretation_sigma = 0.8
+
+[[worlds.presets]]
+name = "Selected Clientele"
+traders = 2500
+sources = 10
+rho_s = 0.5
+sigma_s = 0.75
+clientele_bias = 0.35
+interpretation_sigma = 0.8
+
+[[worlds.presets]]
+name = "Fast Follower"
+traders = 2500
+sources = 2
+rho_s = 0.9
+sigma_s = 1.0
+clientele_bias = 0.35
+interpretation_sigma = 0.8
+
+[same_price]
+band = 0.15
+realizations = 300000
+retained_samples = 400000
+
+[sensitivity]
+realizations_per_block = 20000
+blocks = 3
+
+[sensitivity.baseline]
+name = "baseline"
+traders = 2500
+sources = 10
+rho_s = 0.5
+sigma_s = 0.75
+clientele_bias = 0.35
+interpretation_sigma = 0.8
+
+[sensitivity.sweeps]
+sigma_s = [
+    0.35,
+    0.5,
+    0.75,
+    1.0,
+    1.4,
+    1.8,
+]
+rho_s = [
+    0.0,
+    0.1,
+    0.3,
+    0.5,
+    0.7,
+    0.9,
+]
+sources = [
+    1,
+    2,
+    5,
+    10,
+    25,
+    50,
+    100,
+]
+interpretation_sigma = [
+    0.0,
+    0.2,
+    0.4,
+    0.8,
+    1.6,
+]
+traders = [
+    50,
+    100,
+    250,
+    500,
+    1000,
+    2500,
+    5000,
+]
+clientele_bias = [
+    0.0,
+    0.1,
+    0.35,
+    0.7,
+    1.2,
+]
+
+[sensitivity.phase]
+traders = 2500
+interpretation_sigma = 0.8
+sigma_s_min = 0.35
+sigma_s_max = 1.8
+sigma_s_steps = 9
+bias_min = 0.0
+bias_max = 1.5
+bias_steps = 9
+realizations_per_block = 5000
+blocks = 3
+
+[[sensitivity.phase.slices]]
+label = "rich"
+sources = 100
+rho_s = 0.1
+
+[[sensitivity.phase.slices]]
+label = "moderate"
+sources = 10
+rho_s = 0.5
+
+[[sensitivity.phase.slices]]
+label = "thin"
+sources = 2
+rho_s = 0.9
+
+[validation]
+realizations = 200000
+same_price_realizations = 400000
+plateau_trader_values = [
+    100,
+    1000,
+    10000,
+    100000,
+]
+parity_z_tolerance = 4.0

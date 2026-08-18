@@ -1,0 +1,38 @@
+# Reduced-scale configuration for development and integration testing.
+#
+# Only Monte Carlo sizes change: every parameter grid, world and sweep is the
+# canonical one, so the qualitative structure of each result is preserved while
+# runtimes fall by roughly two orders of magnitude. Sections omitted here fall
+# back to the canonical values in `configs/publication.toml`.
+#
+# Equivalent to `Config::quick()` in src/config.rs, enforced by
+# tests/config_contract.rs.
+
+master_seed = 20260915
+batches = 8
+
+[asymptote]
+realizations = 20000
+
+[grid]
+realizations_per_block = 1000
+
+[doubling]
+realizations = 20000
+
+[worlds]
+realizations = 10000
+
+[same_price]
+realizations = 60000
+
+[sensitivity]
+realizations_per_block = 4000
+
+[sensitivity.phase]
+realizations_per_block = 1000
+
+[validation]
+realizations = 50000
+same_price_realizations = 100000
+plateau_trader_values = [100, 1000, 10000]
