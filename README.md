@@ -55,6 +55,12 @@ and 0.000064. The source column is a real 0.025 every time. Once participation
 has saturated, the only thing left that moves the price closer to the truth is
 more independent information.
 
+![Simulated price MSE against trader count, with each source budget's analytic floor](assets/traders-vs-information.png)
+
+Each curve is a source budget; each dashed line is that budget's analytic floor,
+in the same colour. Two orders of magnitude of participation growth move the
+curves onto their floors and no further.
+
 ## Why pre-IPO onchain markets?
 
 A synthetic onchain market can exist before a public stock market provides an
@@ -76,6 +82,11 @@ All three can print the same price and mean very different things:
 | Selected Clientele | 10 | 0.5 | 0.491 |
 | Fast Follower | 2 | 0.9 | 0.699 |
 
+![Conditional distribution of the latent value given the same onchain price band, by world](assets/same-price.png)
+
+Same price band, same 2,500 traders in every world. The difference in width is a
+difference in information, not in participation.
+
 **No historical IPO was used to calibrate, classify or validate any of this.**
 The worlds are parameter regimes, not companies. See
 [research/CLAIMS.md](research/CLAIMS.md) for the full boundary between what this
@@ -94,6 +105,12 @@ Or reproduce everything from a clean checkout:
 ```bash
 ./scripts/reproduce.sh
 ```
+
+A fresh clone needs a Rust toolchain and nothing else. `results/` and `figures/`
+are not committed because `publication` regenerates all of them in about a
+second; the two figures shown above are committed under `assets/` so this page
+renders without a Python environment. Refresh them with
+`python3 scripts/plot.py --assets assets`.
 
 ## Commands
 
@@ -193,8 +210,11 @@ src/simulation/   the deterministic Monte Carlo engine and the experiments
 src/validation/   the research-integrity gate
 src/output/       CSV and JSON serialisation
 configs/          the canonical experiment definitions
-research/         model, validation, claims and Manus parity documentation
+research/         model, validation, claims and prototype-parity documentation
 scripts/plot.py   the only Python: figures from Rust-generated CSVs
+assets/           the two figures this README embeds (committed)
+results/          generated canonical CSV and JSON (not committed)
+figures/          generated diagnostics (not committed)
 ```
 
 Everything computational is Rust: configuration, random number generation,
@@ -211,6 +231,12 @@ heterogeneous or attention-weighted beliefs, risk-weighted or inventory-
 constrained clearing, Bayesian or partial-adjustment revision. Nothing else
 moves. `tests/architecture.rs` demonstrates this with three implementations
 defined outside the crate.
+
+Canonical results are built only by `CanonicalMarket::from_config`.
+`MarketEngine::new` remains available for experimental compositions, but no code
+under `src/simulation`, `src/validation` or `src/pipeline.rs` may call it, so a
+published number and an ad-hoc composition can never be confused. An architecture
+test enforces that.
 
 Dynamics — information arrival rates, trading arrival rates, capital
 replenishment — do **not** belong inside these traits as extra timestamp
@@ -235,7 +261,8 @@ for the seed derivation scheme.
   would catch.
 * [research/CLAIMS.md](research/CLAIMS.md) — supported and unsupported claims.
 * [research/MANUS_PARITY.md](research/MANUS_PARITY.md) — agreement with the
-  Python research prototype this implementation replaces.
+  Python research prototype this implementation replaces. The prototype is
+  provenance, not a dependency: nothing here executes it.
 
 ## Scope
 

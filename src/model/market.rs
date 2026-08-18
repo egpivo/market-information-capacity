@@ -214,6 +214,12 @@ where
 /// trader beliefs, equal-weight clearing, an official signal and a fixed-weight
 /// revision. Every canonical result in this repository is produced by this
 /// composition; the type spells out which model that is.
+///
+/// [`CanonicalMarket::from_config`] is the **only** way canonical results are
+/// built. [`MarketEngine::new`] stays available for experimental compositions,
+/// but the simulation and validation code never calls it, so a published number
+/// and an ad-hoc composition can never be confused. An architecture test
+/// enforces that split.
 pub type CanonicalMarket = MarketEngine<
     GaussianLatent,
     CorrelatedFiniteSources,
@@ -282,6 +288,35 @@ mod tests {
             assert_eq!(a.latent, b.latent);
             assert_eq!(a.pre_price, b.pre_price);
         }
+    }
+
+    /// The canonical constructor wires every component from the configuration,
+    /// so `CanonicalMarket::from_config` is a faithful reading of a
+    /// `MarketConfig` and not a partly hard-coded market.
+    #[test]
+    fn canonical_constructor_reads_every_component_from_the_config() {
+        let mut cfg = market(13, 321, 0.6);
+        cfg.sources.correlation = 0.31;
+        cfg.sources.sigma = 1.7;
+        cfg.traders.clientele_bias = 0.22;
+        cfg.official.sigma = 0.44;
+        cfg.official.weight = 0.55;
+        let engine = CanonicalMarket::from_config(&cfg).expect("valid");
+
+        assert_eq!(engine.source_count(), cfg.sources.count);
+        assert_eq!(engine.source_model().sigma(), cfg.sources.sigma);
+        assert_eq!(engine.trader_count(), cfg.traders.count);
+        assert_eq!(
+            engine.belief_model().mean_clientele_bias(),
+            cfg.traders.clientele_bias
+        );
+        assert_eq!(
+            engine.belief_model().representation(),
+            Representation::Equal
+        );
+        assert_eq!(engine.latent_process().sigma(), 1.0);
+        assert_eq!(engine.external_signal_process().sigma(), cfg.official.sigma);
+        assert_eq!(engine.revision_rule().weight(), cfg.official.weight);
     }
 
     #[test]

@@ -9,6 +9,7 @@ that Rust already wrote.
 
 Usage:
     python3 scripts/plot.py [--results results] [--figures figures]
+    python3 scripts/plot.py --assets assets     # also refresh the README figures
 
 Requires pandas and matplotlib. If they are unavailable the Rust scientific
 pipeline still runs and still produces every canonical result file; only the
@@ -292,11 +293,38 @@ PLOTS = {
     "information_phase_slices.csv": plot_phase_slices,
 }
 
+# The two figures the README embeds, committed under assets/ so a reader does not
+# need a Python environment to see them. Everything else in figures/ is a
+# regenerated diagnostic.
+README_FIGURES = {
+    "traders_vs_information.png": "traders-vs-information.png",
+    "same_price.png": "same-price.png",
+}
+
+
+def refresh_assets(figures: Path, assets: Path) -> None:
+    """Copy the README figures out of the generated set."""
+    assets.mkdir(parents=True, exist_ok=True)
+    for source_name, asset_name in README_FIGURES.items():
+        source = figures / source_name
+        if not source.exists():
+            print(f"skipped {asset_name}: {source} not generated", file=sys.stderr)
+            continue
+        target = assets / asset_name
+        target.write_bytes(source.read_bytes())
+        print(f"wrote {target}")
+
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--results", type=Path, default=Path("results"))
     parser.add_argument("--figures", type=Path, default=Path("figures"))
+    parser.add_argument(
+        "--assets",
+        type=Path,
+        default=None,
+        help="also refresh the committed README figures in this directory",
+    )
     args = parser.parse_args()
 
     missing = [name for name in PLOTS if not (args.results / name).exists()]
@@ -311,6 +339,8 @@ def main() -> int:
 
     for name, plot in PLOTS.items():
         plot(args.results, args.figures)
+    if args.assets is not None:
+        refresh_assets(args.figures, args.assets)
     return 0
 
 

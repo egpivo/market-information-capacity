@@ -282,3 +282,52 @@ fn latent_process_is_a_standalone_seam() {
     let sample: LatentValue = process.sample(&mut rng);
     assert!(sample.value().is_finite());
 }
+
+/// The canonical composition has exactly one entry point.
+///
+/// `MarketEngine::new` stays public so an experiment can compose an arbitrary
+/// market — `a_new_source_model_reaches_its_own_analytic_floor` above does
+/// exactly that. But every canonical result must come from
+/// `CanonicalMarket::from_config`, so that "the v4 research composition" and "some
+/// composition someone assembled inline" can never be confused in a published
+/// number. This test enforces that split at the level of the simulation and
+/// validation code, which is where canonical results are produced.
+#[test]
+fn canonical_results_are_built_only_through_the_canonical_constructor() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut offenders = Vec::new();
+    for area in ["src/simulation", "src/validation", "src/pipeline.rs"] {
+        for path in rust_files(&root.join(area)) {
+            let text = std::fs::read_to_string(&path).expect("read source");
+            for (number, line) in text.lines().enumerate() {
+                if line.contains("MarketEngine::new(") {
+                    offenders.push(format!("{}:{}", path.display(), number + 1));
+                }
+            }
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "canonical code must build markets with CanonicalMarket::from_config, but found          MarketEngine::new at: {}",
+        offenders.join(", ")
+    );
+}
+
+fn rust_files(path: &std::path::Path) -> Vec<std::path::PathBuf> {
+    if path.is_file() {
+        return vec![path.to_path_buf()];
+    }
+    let mut out = Vec::new();
+    let Ok(entries) = std::fs::read_dir(path) else {
+        return out;
+    };
+    for entry in entries.flatten() {
+        let entry_path = entry.path();
+        if entry_path.is_dir() {
+            out.extend(rust_files(&entry_path));
+        } else if entry_path.extension().is_some_and(|ext| ext == "rs") {
+            out.push(entry_path);
+        }
+    }
+    out
+}
