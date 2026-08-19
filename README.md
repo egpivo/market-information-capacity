@@ -1,277 +1,60 @@
-# Market Information Capacity
+# market-information-capacity
 
-**More traders do not necessarily mean more information.**
+Deterministic Rust toolkit for measuring how finite independent information constrains market price informativeness as trader participation grows.
 
-A market can contain thousands of participants while those participants process
-only a small, correlated set of underlying signals. Once those signals are
-already represented in the price, adding traders can increase participation
-without proportionally increasing what the market knows. Participation and
-information are separate quantities, and only one of them is what the price is
-made of.
+It does **not** treat `traders ↑` as `information ↑`. Trader count `N_T` and source budget `K` are separate state variables. Belief formation receives a `SourceSet`, never the latent value, so no participation model can manufacture fundamental information — the constraint is a trait signature, not a convention. Price error converges to `σ_s²[ρ_s + (1−ρ_s)/K] + b²`, in which `N_T` does not appear.
 
-This repository is a pure-Rust research tool that makes that statement precise,
-simulates it, and refuses to publish a result that fails to hold.
+Pure simulation. No market data, no calibration to any real venue, no welfare, no optimal participant count.
 
-## The result
+Model, validation and claim boundaries: `research/MODEL.md`, `research/VALIDATION.md`, `research/CLAIMS.md` (gitignored local notes).
 
-Let `V` be the latent value a market is trying to price, let there be `K`
-fundamental information sources about it, and let the errors in those sources be
-correlated with coefficient `rho_s` and scale `sigma_s`. As the trader
-population grows, the mean squared error of the market price against `V`
-converges to
+## Prerequisites
 
-```
-MSE_inf(K, rho_s) = sigma_s^2 [ rho_s + (1 - rho_s) / K ]
-```
+- Rust 1.85+ (`rustup`, stable toolchain)
+- Cargo
+- Python 3 with pandas and matplotlib, for figures only
 
-* `K` — the number of fundamental sources. More sources lower the floor.
-* `rho_s` — how much error the sources share. More correlation raises the floor,
-  and no amount of `K` removes the shared part: as `K` grows the floor tends to
-  `sigma_s^2 * rho_s`, not to zero.
-* `sigma_s` — how noisy each source is.
-* The trader count `N_T` **does not appear**.
-
-The independent-source case is the familiar `sigma_s^2 / K`. The general case is
-the one that matters here, because real information sources are correlated:
-analysts read the same filings, the same round of coverage, the same handful of
-primary reports.
-
-Traders are not absent from the model — they are just doing something else. Each
-trader reads an existing source and adds interpretation noise; averaging over
-more traders averages that noise away at rate `sigma_nu^2 / N_T`. That term
-vanishes. The floor does not.
-
-What the simulation shows, at `K = 10`, `rho_s = 0.5`, with 100,000 realizations
-per arm:
-
-| Starting point | Doubling the traders buys | Doubling the sources buys |
-|---|---:|---:|
-| 100 traders | 0.006 | 0.025 |
-| 1,000 traders | 0.001 | 0.027 |
-| 5,000 traders | 0.003 | 0.022 |
-
-The trader column is Monte Carlo noise around an exact value of 0.0032, 0.00032
-and 0.000064. The source column is a real 0.025 every time. Once participation
-has saturated, the only thing left that moves the price closer to the truth is
-more independent information.
-
-![Simulated price MSE against trader count, with each source budget's analytic floor](assets/traders-vs-information.png)
-
-Each curve is a source budget; each dashed line is that budget's analytic floor,
-in the same colour. Two orders of magnitude of participation growth move the
-curves onto their floors and no further.
-
-## Why pre-IPO onchain markets?
-
-A synthetic onchain market can exist before a public stock market provides an
-external anchor. That makes it a useful setting for studying the difference
-between market participation and independent information, because for a while
-there is nothing else pinning the price down: no exchange close, no index, no
-regulated disclosure cadence. The market's information capacity is whatever its
-participants can independently learn, and the price is the only visible output.
-
-The repository ships three parameter regimes that illustrate the range — an
-*Informative* market with many weakly correlated sources, a *Selected Clientele*
-market with fewer correlated sources and a participation tilt, and a *Fast
-Follower* market with 2,500 traders reading just two highly correlated sources.
-All three can print the same price and mean very different things:
-
-| World | `K` | `rho_s` | SD of `V` given the same price band |
-|---|---:|---:|---:|
-| Informative | 50 | 0.1 | 0.175 |
-| Selected Clientele | 10 | 0.5 | 0.491 |
-| Fast Follower | 2 | 0.9 | 0.699 |
-
-![Conditional distribution of the latent value given the same onchain price band, by world](assets/same-price.png)
-
-Same price band, same 2,500 traders in every world. The difference in width is a
-difference in information, not in participation.
-
-**No historical IPO was used to calibrate, classify or validate any of this.**
-The worlds are parameter regimes, not companies. See
-[research/CLAIMS.md](research/CLAIMS.md) for the full boundary between what this
-repository supports and what it does not.
-
-## Quick start
+## Installation
 
 ```bash
-cargo run --release -- validate       # research-integrity gate, ~0.3 s
-cargo run --release -- publication    # every canonical result file, ~1 s
-python3 scripts/plot.py               # figures, optional
+git clone <repo-url> market-information-capacity
+cd market-information-capacity
+cargo build --release
 ```
 
-Or reproduce everything from a clean checkout:
+## Usage
 
 ```bash
-./scripts/reproduce.sh
+cargo test --release
+
+cargo run --release -- validate --verbose
+cargo run --release -- publication --config configs/publication.toml
+
+cargo run --release -- asymptote
+cargo run --release -- traders-vs-sources
+cargo run --release -- same-price
+cargo run --release -- worlds
+cargo run --release -- sensitivity
+cargo run --release -- scale-participation --config configs/publication.toml
+
+cargo run --release -- worlds --config configs/quick.toml --seed 20260915 --output-dir results
+
+python3 scripts/plot.py
+python3 scripts/make_participation_gif.py
 ```
 
-A fresh clone needs a Rust toolchain and nothing else. `results/` and `figures/`
-are not committed because `publication` regenerates all of them in about a
-second; the two figures shown above are committed under `assets/` so this page
-renders without a Python environment. Refresh them with
-`python3 scripts/plot.py --assets assets`.
+Exit codes: `0` on a successful run **or** a passing gate; `1` when a validation check fails or a config/IO error occurs. `validate` is the only command that can fail on economics rather than mechanics.
 
-## Commands
+`validate` prints nine checks and the evidence behind each with `--verbose`. A `PASS` line without a measured number is not the output format — every check reports what it measured.
 
-| Command | What it produces |
-|---|---|
-| `validate` | Runs every validation gate; exits non-zero on failure. `results/validation.json` |
-| `asymptote` | Simulated MSE against the analytic floor. `results/finite_source_asymptote.csv` |
-| `traders-vs-sources` | The `N_T` × `K` grid, the doubling comparison, convergence thresholds |
-| `same-price` | Conditional distribution of `V` given the same price band |
-| `worlds` | The three regimes through the official-information boundary |
-| `sensitivity` | One-factor sweeps and the phase slices |
-| `publication` | All of the above, plus `results/summary.json` |
+`./scripts/reproduce.sh` runs fmt, clippy, tests, `validate`, `publication`, `scale-participation` and the figures in one pass. Publication scale takes a few seconds on ten cores; a million-trader cell costs what a one-trader cell costs, because the trader count enters through a variance rather than a million objects.
 
-Global flags: `--config <PATH>`, `--seed <SEED>`, `--output-dir <DIR>`,
-`--quick`, `--verbose`.
+Experiments live under `configs/`: `publication.toml` states every canonical parameter and is byte-equivalent to `Config::publication()`, enforced by `tests/config_contract.rs`; `quick.toml` is the same experiment set at reduced Monte Carlo scale. Three parameter regimes — Informative, Selected Clientele, Fast Follower — are configuration, never separate code paths. Results land in `results/` and figures in `figures/`, both regenerated in about a second and neither tracked.
 
-Experiments are configured in TOML, not in flags:
+Every simulated value is written next to its closed form, so `analytic_floor` and `analytic_mse` are columns in the output rather than curves fitted at plot time.
 
-```bash
-cargo run --release -- worlds --config configs/publication.toml
-```
+Master seed `20260915`. Seeds derive from a pure hash of `(experiment, cell, block, batch)`, so parallelism changes runtime and nothing else; `tests/reproducibility.rs` asserts bitwise reproduction.
 
-`configs/publication.toml` is the canonical configuration and states every
-parameter of every experiment. `configs/quick.toml` runs the same experiments at
-reduced Monte Carlo scale. Both are checked against the in-code defaults by
-`tests/config_contract.rs`, so they cannot drift.
+Claim gate for article numbers: `cargo run --release -- validate` and `research/CLAIMS.md`.
 
-## Architecture
-
-Each layer of the hierarchy is a trait, and each trait is one economic degree of
-freedom:
-
-```
-LatentProcess            what is the market trying to price?
-      │  LatentValue
-      ▼
-InformationSourceModel   how much can independently be known about it?
-      │  SourceSet
-      ▼
-BeliefFormation          how do participants interpret what is known?
-      │  BeliefSet
-      ▼
-ClearingRule             how do those views become a price?
-      │  MarketPrice
-      ▼
-RevisionRule  ◀── ExternalSignal ◀── ExternalSignalProcess
-                                         how does new information arrive?
-```
-
-### The dependency rule
-
-**Fundamental information may only be created by the source layer.**
-
-- `BeliefFormation::form` receives a `SourceSet`, **not** a `LatentValue`.
-- `ClearingRule::clear` receives a `BeliefSet`, not sources and not latent state.
-- `RevisionRule::revise` receives a `MarketPrice` and an `ExternalSignal`, not
-  latent state.
-
-This direction is deliberate, and it is why the result above cannot quietly
-break. No belief model can reach the latent value or the source generator, so no
-amount of trader growth can increase the market's fundamental information
-capacity. That was the failure of an earlier iteration of this model; it is now
-a property of the type signatures rather than of a reviewer's attention. Because
-the restriction lives in the traits, violating it means changing a trait — a
-visible, reviewable act. `tests/architecture.rs` checks the consequences.
-
-`V`, `s_k`, `m_i`, `P_OC` and the external signal are all `f64` to the machine
-and different things to an economist, so each is a distinct newtype. `revise`
-takes a `MarketPrice` and an `ExternalSignal`, not two bare floats.
-
-Composition happens in `MarketEngine`, generic over all six components with
-static dispatch, so there is no vtable in the Monte Carlo hot loop.
-`CanonicalMarket` names the composition that produces every canonical result.
-Dynamic dispatch appears in exactly one place — `Vec<Box<dyn ValidationCheck>>` —
-where the collection really is heterogeneous and is enumerated once per run.
-
-Metrics, configuration, output formats, world presets and the RNG are
-deliberately *not* behind traits. They are data and infrastructure, not economic
-degrees of freedom. In particular the three worlds are **configuration**, never
-polymorphic model types: nothing in the simulation branches on which world is
-running.
-
-## What is in here
-
-```
-src/model/        the hierarchy: one trait, one module, one layer
-  types.rs          domain newtypes and the containers between layers
-  latent.rs         LatentProcess          → GaussianLatent
-  sources.rs        InformationSourceModel → CorrelatedFiniteSources
-  traders.rs        BeliefFormation        → SourceAttachedBeliefs
-  clearing.rs       ClearingRule           → EqualRepresentationClearing
-  official.rs       ExternalSignalProcess  → OfficialSignalProcess
-                    RevisionRule           → FixedWeightRevision
-  market.rs         MarketEngine, CanonicalMarket
-src/analytics/    closed-form results and streaming statistics
-src/simulation/   the deterministic Monte Carlo engine and the experiments
-src/validation/   the research-integrity gate
-src/output/       CSV and JSON serialisation
-configs/          the canonical experiment definitions
-research/         model, validation, claims and prototype-parity documentation
-scripts/plot.py   the only Python: figures from Rust-generated CSVs
-assets/           the two figures this README embeds (committed)
-results/          generated canonical CSV and JSON (not committed)
-figures/          generated diagnostics (not committed)
-```
-
-Everything computational is Rust: configuration, random number generation,
-every layer of the model, market clearing, Monte Carlo, online statistics, the
-analytic floor, all experiments, all validation, and all output. Python renders
-figures from files Rust has already written. It runs no simulation and computes
-no canonical statistic.
-
-### Extending it
-
-Adding an economic mechanism means adding one implementation of one trait:
-Student-t or regime-switching latent values, clustered or empirical sources,
-heterogeneous or attention-weighted beliefs, risk-weighted or inventory-
-constrained clearing, Bayesian or partial-adjustment revision. Nothing else
-moves. `tests/architecture.rs` demonstrates this with three implementations
-defined outside the crate.
-
-Canonical results are built only by `CanonicalMarket::from_config`.
-`MarketEngine::new` remains available for experimental compositions, but no code
-under `src/simulation`, `src/validation` or `src/pipeline.rs` may call it, so a
-published number and an ad-hoc composition can never be confused. An architecture
-test enforces that.
-
-Dynamics — information arrival rates, trading arrival rates, capital
-replenishment — do **not** belong inside these traits as extra timestamp
-arguments. They belong in a future `src/dynamics/` layer that reuses these
-components unchanged. Extensibility here comes from composition, not from
-guessing future requirements in advance.
-
-## Reproducibility
-
-The master seed is `20260915`. Every stream descends from it through a pure hash
-of the work unit's coordinates — experiment, parameter cell, seed block, batch —
-so the same configuration and seed reproduce the same numbers regardless of how
-many threads ran. `tests/reproducibility.rs` and the `deterministic
-reproduction` gate both enforce this. See [research/MODEL.md](research/MODEL.md)
-for the seed derivation scheme.
-
-## Reading further
-
-* [research/MODEL.md](research/MODEL.md) — the hierarchy, its assumptions and
-  its equations.
-* [research/VALIDATION.md](research/VALIDATION.md) — every gate and what it
-  would catch.
-* [research/CLAIMS.md](research/CLAIMS.md) — supported and unsupported claims.
-* [research/MANUS_PARITY.md](research/MANUS_PARITY.md) — agreement with the
-  Python research prototype this implementation replaces. The prototype is
-  provenance, not a dependency: nothing here executes it.
-
-## Scope
-
-Version 0.1 does one thing: simulate and validate how finite independent
-information constrains market price informativeness even as trader participation
-grows. There are no order books, AMMs, latency, MEV, gas, fees, arbitrage,
-liquidation, welfare or capital dynamics, and none of them are needed for the
-result.
-
-## License
-
-MIT. See [LICENSE](LICENSE).
+MIT — see `LICENSE`.
