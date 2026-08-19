@@ -12,6 +12,7 @@ pub mod finite_source;
 pub mod gate;
 pub mod hierarchy;
 pub mod same_price;
+pub mod scale;
 
 use serde::Serialize;
 

@@ -18,8 +18,8 @@ use crate::error::Result;
 use crate::output::{write_json, write_rows};
 use crate::simulation::experiment::{Experiment, SimulationContext};
 use crate::simulation::{
-    AsymptoteExperiment, SamePriceExperiment, SensitivityExperiment, TradersVsSourcesExperiment,
-    WorldsExperiment,
+    AsymptoteExperiment, ParticipationScaleExperiment, SamePriceExperiment, SensitivityExperiment,
+    TradersVsSourcesExperiment, WorldsExperiment,
 };
 use crate::validation::{GateReport, run_gate};
 
@@ -41,6 +41,14 @@ pub mod files {
     pub const SENSITIVITY: &str = "sensitivity.csv";
     /// Information-independence phase slices.
     pub const PHASE: &str = "information_phase_slices.csv";
+    /// Participation-scale curve, one trader to one million.
+    pub const PARTICIPATION_SCALE: &str = "participation_scale.csv";
+    /// Informational return to doubling participation.
+    pub const MARGINAL_GAIN: &str = "marginal_information_gain.csv";
+    /// Aggregated-versus-explicit belief representation check.
+    pub const SCALE_EQUIVALENCE: &str = "participation_scale_equivalence.csv";
+    /// Participation-scale run summary.
+    pub const SCALE_SUMMARY: &str = "participation_scale_summary.json";
     /// Validation report.
     pub const VALIDATION: &str = "validation.json";
     /// Publication run summary.
@@ -195,6 +203,71 @@ pub fn run_sensitivity(cfg: &Config, out_dir: &Path) -> Result<RunSummary> {
         }),
         gate: None,
     })
+}
+
+/// Run the participation-scale experiment and write its files.
+///
+/// This is an additional experiment. It writes only its own files and does not
+/// touch any canonical v4 result.
+pub fn run_participation_scale(cfg: &Config, out_dir: &Path) -> Result<RunSummary> {
+    let start = Instant::now();
+    let result = ParticipationScaleExperiment.run(&SimulationContext::new(cfg))?;
+    write_rows(path(out_dir, files::PARTICIPATION_SCALE), &result.curve)?;
+    write_rows(path(out_dir, files::MARGINAL_GAIN), &result.marginal_gain)?;
+    write_rows(path(out_dir, files::SCALE_EQUIVALENCE), &result.equivalence)?;
+
+    let gates = crate::validation::scale::run_scale_gates(cfg, &result);
+    let passed = gates.iter().all(|g| g.passed());
+
+    let worst_z = result
+        .curve
+        .iter()
+        .filter_map(|r| r.z_gap)
+        .fold(0.0f64, |a, z| a.max(z.abs()));
+    let saturation: Vec<_> = cfg
+        .participation_scale
+        .k_values
+        .iter()
+        .filter_map(|&k| {
+            let rows: Vec<_> = result.curve.iter().filter(|r| r.k_sources == k).collect();
+            let first = rows.first()?;
+            let last = rows.last()?;
+            Some(json!({
+                "k_sources": k,
+                "analytic_floor": first.analytic_floor,
+                "mse_at_min_traders": first.analytic_mse,
+                "mse_at_max_traders": last.analytic_mse,
+                "min_traders": first.n_traders,
+                "max_traders": last.n_traders,
+                "relative_gap_at_max_traders": last.relative_gap,
+            }))
+        })
+        .collect();
+
+    let summary = RunSummary {
+        command: "scale-participation".into(),
+        master_seed: cfg.master_seed,
+        elapsed_seconds: start.elapsed().as_secs_f64(),
+        outputs: vec![
+            files::PARTICIPATION_SCALE.into(),
+            files::MARGINAL_GAIN.into(),
+            files::SCALE_EQUIVALENCE.into(),
+            files::SCALE_SUMMARY.into(),
+        ],
+        headline: json!({
+            "curve_points": result.curve.len(),
+            "monte_carlo_cells": result.curve.iter().filter(|r| r.mc_mse.is_some()).count(),
+            "realizations_per_cell": cfg.participation_scale.realizations,
+            "max_abs_z_vs_analytic_curve": worst_z,
+            "gain_times_n_constant": cfg.participation_scale.interpretation_sigma.powi(2) / 2.0,
+            "saturation": saturation,
+            "gates": gates,
+            "gates_passed": passed,
+        }),
+        gate: None,
+    };
+    write_json(path(out_dir, files::SCALE_SUMMARY), &summary)?;
+    Ok(summary)
 }
 
 /// Run the validation gate and write its report.

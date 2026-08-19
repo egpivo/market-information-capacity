@@ -12,6 +12,7 @@
 pub mod asymptote;
 pub mod experiment;
 pub mod monte_carlo;
+pub mod participation_scale;
 pub mod same_price;
 pub mod sensitivity;
 pub mod traders_vs_sources;
@@ -19,6 +20,9 @@ pub mod worlds;
 
 pub use asymptote::{AsymptoteExperiment, AsymptoteRow};
 pub use experiment::{Experiment, SimulationContext};
+pub use participation_scale::{
+    EquivalenceRow, MarginalGainRow, ParticipationScale, ParticipationScaleExperiment, ScaleRow,
+};
 pub use same_price::{SamePriceExperiment, SamePriceRow};
 pub use sensitivity::{PhaseRow, Sensitivity, SensitivityExperiment, SensitivityRow};
 pub use traders_vs_sources::{

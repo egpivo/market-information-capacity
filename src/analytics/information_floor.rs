@@ -58,6 +58,39 @@ pub fn analytic_pre_price_mse(cfg: &MarketConfig) -> f64 {
     floor_of(cfg) + bias * bias + sigma_nu * sigma_nu / cfg.traders.count as f64
 }
 
+/// Informational return to doubling participation, `MSE(N_T) - MSE(2 N_T)`.
+///
+/// Only the interpretation-noise term of [`analytic_pre_price_mse`] depends on
+/// the trader count, so
+///
+/// ```text
+/// G_x2(N_T) = sigma_nu^2 / N_T - sigma_nu^2 / (2 N_T) = sigma_nu^2 / (2 N_T).
+/// ```
+///
+/// The gain is exactly inverse in current participation, and it does not depend
+/// on the source budget `K`, the source correlation `rho_s`, or the clientele
+/// tilt — those terms cancel in the difference. Doubling a market's population
+/// buys the same absolute improvement whether its information is thin or rich;
+/// what differs is the floor that improvement is measured against.
+pub fn analytic_doubling_gain(cfg: &MarketConfig) -> f64 {
+    let sigma_nu = cfg.traders.interpretation_sigma;
+    sigma_nu * sigma_nu / (2.0 * cfg.traders.count as f64)
+}
+
+/// Absolute distance of the finite-`N_T` MSE above its asymptotic floor.
+pub fn analytic_distance_to_floor(cfg: &MarketConfig) -> f64 {
+    analytic_pre_price_mse(cfg) - floor_of(cfg)
+}
+
+/// Distance above the floor as a fraction of the floor.
+pub fn analytic_relative_gap(cfg: &MarketConfig) -> f64 {
+    let floor = floor_of(cfg);
+    if floor <= 0.0 {
+        return f64::NAN;
+    }
+    analytic_distance_to_floor(cfg) / floor
+}
+
 /// Exact post-boundary price MSE under the fixed-weight official revision.
 ///
 /// `P_post - V = (1 - w)(P_pre - V) + w * sigma_o * epsilon`, so
@@ -155,6 +188,7 @@ pub fn approx_conditional_sd(cfg: &MarketConfig, band: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::{SourceConfig, TraderConfig};
     use approx::assert_relative_eq;
 
     #[test]
@@ -195,6 +229,94 @@ mod tests {
         let mid = analytic_floor(k, 0.5, sigma);
         let high = analytic_floor(k, 0.9, sigma);
         assert!(low < mid && mid < high, "{low} {mid} {high}");
+    }
+
+    /// The doubling gain is exactly `sigma_nu^2 / (2 N_T)`: inverse in
+    /// participation and independent of the source budget.
+    #[test]
+    fn doubling_gain_is_inverse_in_participation_and_free_of_k() {
+        let base = |k: usize, n: usize, rho: f64| MarketConfig {
+            sources: SourceConfig {
+                count: k,
+                sigma: 1.0,
+                correlation: rho,
+            },
+            traders: TraderConfig {
+                count: n,
+                interpretation_sigma: 0.8,
+                clientele_bias: 0.35,
+                representation: Default::default(),
+                noise: Default::default(),
+            },
+            official: Default::default(),
+        };
+
+        for n in [1usize, 10, 1_000, 1_000_000] {
+            let expected = 0.64 / (2.0 * n as f64);
+            // Independent of K, of rho_s, and of the clientele tilt.
+            for (k, rho) in [(2usize, 0.0), (10, 0.5), (50, 0.9)] {
+                let cfg = base(k, n, rho);
+                assert_relative_eq!(analytic_doubling_gain(&cfg), expected, epsilon = 1e-15);
+                // It really is the difference of the two finite-N MSEs.
+                let mut doubled = cfg;
+                doubled.traders.count = 2 * n;
+                assert_relative_eq!(
+                    analytic_pre_price_mse(&cfg) - analytic_pre_price_mse(&doubled),
+                    expected,
+                    epsilon = 1e-12
+                );
+            }
+        }
+    }
+
+    /// `G(N) * N` is constant, which is the power law stated as an identity.
+    #[test]
+    fn gain_times_participation_is_constant() {
+        let cfg = |n: usize| MarketConfig {
+            sources: SourceConfig {
+                count: 10,
+                sigma: 1.0,
+                correlation: 0.5,
+            },
+            traders: TraderConfig {
+                count: n,
+                interpretation_sigma: 0.8,
+                clientele_bias: 0.0,
+                representation: Default::default(),
+                noise: Default::default(),
+            },
+            official: Default::default(),
+        };
+        for n in [1usize, 7, 100, 12_345, 1_000_000] {
+            let product = analytic_doubling_gain(&cfg(n)) * n as f64;
+            assert_relative_eq!(product, 0.32, epsilon = 1e-12);
+        }
+    }
+
+    #[test]
+    fn distance_to_floor_vanishes_as_participation_grows() {
+        let cfg = |n: usize| MarketConfig {
+            sources: SourceConfig {
+                count: 10,
+                sigma: 1.0,
+                correlation: 0.5,
+            },
+            traders: TraderConfig {
+                count: n,
+                interpretation_sigma: 0.8,
+                clientele_bias: 0.0,
+                representation: Default::default(),
+                noise: Default::default(),
+            },
+            official: Default::default(),
+        };
+        let mut previous = f64::INFINITY;
+        for n in [1usize, 10, 1_000, 100_000, 1_000_000] {
+            let d = analytic_distance_to_floor(&cfg(n));
+            assert!(d > 0.0 && d < previous, "distance must fall in N_T");
+            previous = d;
+        }
+        assert!(analytic_relative_gap(&cfg(1_000_000)) < 1e-5);
     }
 
     #[test]

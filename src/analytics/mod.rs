@@ -11,7 +11,8 @@ pub mod metrics;
 
 pub use convergence::{clean_threshold, first_grid_threshold};
 pub use information_floor::{
-    analytic_floor, analytic_mean_abs_revision, analytic_post_price_mse, analytic_pre_price_mse,
-    approx_conditional_sd, floor_of,
+    analytic_distance_to_floor, analytic_doubling_gain, analytic_floor, analytic_mean_abs_revision,
+    analytic_post_price_mse, analytic_pre_price_mse, analytic_relative_gap, approx_conditional_sd,
+    floor_of,
 };
 pub use metrics::{McSummary, OnlineStats, SampleReservoir, quantile_sorted};

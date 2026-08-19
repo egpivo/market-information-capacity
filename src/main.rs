@@ -51,6 +51,8 @@ enum Command {
     Worlds,
     /// One-factor and phase sensitivity sweeps.
     Sensitivity,
+    /// Sweep participation from one trader to one million at a fixed information budget.
+    ScaleParticipation,
     /// Regenerate every canonical result file.
     Publication,
 }
@@ -99,6 +101,7 @@ fn run() -> anyhow::Result<ExitCode> {
         Command::SamePrice => pipeline::run_same_price(&cfg, out_dir)?,
         Command::Worlds => pipeline::run_worlds(&cfg, out_dir)?,
         Command::Sensitivity => pipeline::run_sensitivity(&cfg, out_dir)?,
+        Command::ScaleParticipation => pipeline::run_participation_scale(&cfg, out_dir)?,
         Command::Publication => pipeline::run_publication(&cfg, out_dir)?,
     };
 

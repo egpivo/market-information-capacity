@@ -225,3 +225,62 @@ plateau_trader_values = [
     100000,
 ]
 parity_z_tolerance = 4.0
+
+[participation_scale]
+trader_values = [
+    1,
+    2,
+    3,
+    5,
+    10,
+    20,
+    30,
+    50,
+    75,
+    100,
+    175,
+    250,
+    500,
+    750,
+    1000,
+    1750,
+    2500,
+    5000,
+    7500,
+    10000,
+    25000,
+    50000,
+    100000,
+    250000,
+    500000,
+    1000000,
+]
+mc_trader_values = [
+    1,
+    5,
+    20,
+    100,
+    1000,
+    10000,
+    100000,
+    1000000,
+]
+k_values = [
+    2,
+    10,
+    50,
+]
+rho_s = 0.5
+sigma_s = 1.0
+interpretation_sigma = 0.8
+clientele_bias = 0.0
+realizations = 1000000
+equivalence_trader_values = [
+    1,
+    10,
+    100,
+    1000,
+]
+equivalence_realizations = 200000
+parity_z_tolerance = 4.0
+

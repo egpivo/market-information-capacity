@@ -29,6 +29,7 @@ try:
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     import pandas as pd
+    from matplotlib.lines import Line2D
 except ImportError as exc:  # pragma: no cover - environment dependent
     sys.exit(
         f"plotting requires pandas and matplotlib ({exc}); "
@@ -37,6 +38,15 @@ except ImportError as exc:  # pragma: no cover - environment dependent
 
 # A calm, colour-blind-safe palette. Curves and their floors share a colour.
 PALETTE = ["#1b5e7e", "#b4632a", "#3f7a4f", "#7a4f8c", "#8c6d1f", "#6b6b6b"]
+
+# One semantic mapping for information budget, shared across every figure.
+THIN = "#8A6799"      # muted plum  — smallest K
+MODERATE = "#4C6A91"  # steel blue  — middle K
+RICH = "#6A8F73"      # sage green  — largest K
+BG = "white"
+GRID = "#d9d9d9"
+MUTED = "#5a5a5a"
+REF = "#7a7a7a"
 GRID_KW = dict(color="#d9d9d9", linewidth=0.6)
 
 plt.rcParams.update(
@@ -167,7 +177,7 @@ def plot_same_price(results: Path, figures: Path) -> None:
     ax.set_ylim(-0.75, len(rows) - 0.35)
     band = rows["band"].iloc[0]
     ax.set_xlabel(f"Latent value $V$ given $|P_{{OC}}| < {band}$")
-    ax.set_title("The same onchain price can mean three different things")
+    ax.set_title("Similar onchain prices can carry very different information")
     ax.grid(axis="x", **GRID_KW)
     ax.set_axisbelow(True)
     ax.margins(x=0.08)
@@ -286,11 +296,138 @@ def plot_phase_slices(results: Path, figures: Path) -> None:
     print(f"wrote {path}")
 
 
+def plot_participation_scale(results: Path, figures: Path) -> None:
+    """Price error from one trader to one million, with analytic floors.
+
+    The analytic curve is `analytic_mse`, written by the simulation; the dashed
+    floors are its `analytic_floor` column. Monte Carlo points are drawn only
+    where the simulation validated the curve.
+    """
+    curve = pd.read_csv(results / "participation_scale.csv")
+    budgets = sorted(curve["k_sources"].unique())
+    colours = dict(zip(budgets, [THIN, MODERATE, RICH]))
+
+    fig, ax = plt.subplots(figsize=(9.4, 5.4))
+    for k in budgets:
+        cell = curve[curve["k_sources"] == k].sort_values("n_traders")
+        colour = colours.get(k, PALETTE[0])
+        floor = cell["analytic_floor"].iloc[0]
+
+        # Below one trader per source the model still credits the price with the
+        # full K-source aggregate. Draw that stretch dotted: it is an
+        # idealisation, not a claim about markets with fewer traders than
+        # sources.
+        idealised = cell[cell["full_coverage_assumed"]]
+        covered = cell[~cell["full_coverage_assumed"]]
+        if len(idealised):
+            bridge = pd.concat([idealised, covered.head(1)])
+            ax.plot(bridge["n_traders"], bridge["analytic_mse"],
+                    color=colour, linewidth=1.8, linestyle=":", alpha=0.85)
+        ax.plot(covered["n_traders"], covered["analytic_mse"],
+                color=colour, linewidth=2.2, label=f"K = {k}")
+        ax.axhline(floor, color=colour, linestyle="--", linewidth=1.3, alpha=0.85)
+        # Stagger the labels: the two lowest floors sit close together.
+        below = k == budgets[-1]
+        ax.annotate(f"K = {k} floor  {floor:.3f}",
+                    xy=(cell["n_traders"].max(), floor),
+                    xytext=(14, -6 if below else 5),
+                    textcoords="offset points", va="top" if below else "bottom",
+                    ha="left", fontsize=13, color=colour)
+
+        mc = cell.dropna(subset=["mc_mse"])
+        ax.errorbar(mc["n_traders"], mc["mc_mse"], yerr=mc["mc_se"],
+                    fmt="o", markersize=6, color=colour, ecolor=colour,
+                    elinewidth=1.2, capsize=3,
+                    markerfacecolor=BG, markeredgewidth=1.6, zorder=5)
+
+    ax.set_xscale("log")
+    ax.set_xlim(0.7, float(curve["n_traders"].max()) * 6)
+    ax.set_xlabel("Traders $N_T$ (log scale)")
+    ax.set_ylabel("Price error MSE($P^{OC}$, V)")
+    ax.set_title("More traders eventually hit an information floor", pad=14)
+    ax.grid(axis="y", color=GRID, linewidth=0.7)
+    ax.set_axisbelow(True)
+    idealised_proxy = Line2D([0], [0], color=MUTED, linestyle=":", linewidth=1.8)
+    handles, labels = ax.get_legend_handles_labels()
+    ax.legend(handles + [idealised_proxy], labels + ["$N_T$ < K: full coverage assumed"],
+              loc="upper right", ncol=2)
+    ax.margins(y=0.12)
+
+    fig.tight_layout()
+    path = figures / "traders_vs_information_scale.png"
+    fig.savefig(path)
+    plt.close(fig)
+    print(f"wrote {path}")
+
+
+def plot_marginal_gain(results: Path, figures: Path) -> None:
+    """Informational return to doubling participation.
+
+    The gain is identical across source budgets under this model — it is
+    `sigma_nu^2 / (2 N_T)`, in which K does not appear — so one curve is drawn
+    rather than three overlapping ones.
+    """
+    gain = pd.read_csv(results / "marginal_information_gain.csv")
+    budgets = sorted(gain["k_sources"].unique())
+    reference = gain[gain["k_sources"] == budgets[0]].sort_values("n_traders")
+    identical = all(
+        abs(gain[gain["k_sources"] == k].sort_values("n_traders")["analytic_gain"].values
+            - reference["analytic_gain"].values).max() < 1e-15
+        for k in budgets
+    )
+
+    fig, ax = plt.subplots(figsize=(9.4, 5.2))
+    ax.plot(reference["n_traders"], reference["analytic_gain"],
+            color=MODERATE, linewidth=2.2,
+            label="all source budgets" if identical else f"K = {budgets[0]}")
+    if not identical:
+        for k in budgets[1:]:
+            cell = gain[gain["k_sources"] == k].sort_values("n_traders")
+            ax.plot(cell["n_traders"], cell["analytic_gain"],
+                    linewidth=2.0, label=f"K = {k}")
+
+    resolved = gain[gain["mc_gain_resolved"] == True]  # noqa: E712
+    unresolved = gain[gain["mc_gain_resolved"] == False]  # noqa: E712
+    if len(resolved):
+        ax.errorbar(resolved["n_traders"], resolved["mc_gain"], yerr=resolved["mc_gain_se"],
+                    fmt="o", markersize=6, color=MODERATE, ecolor=MODERATE,
+                    elinewidth=1.2, capsize=3, markerfacecolor=BG, markeredgewidth=1.6,
+                    zorder=5, label="simulated, resolved")
+    if len(unresolved):
+        se = float(unresolved["mc_gain_se"].median())
+        ax.axhline(3 * se, color=REF, linestyle="-.", linewidth=1.2)
+        ax.annotate("below here the simulation cannot separate the gain from zero",
+                    xy=(float(gain["n_traders"].max()), 3 * se), xytext=(0, -10),
+                    textcoords="offset points", fontsize=12, color=MUTED,
+                    ha="right", va="top")
+
+    ax.set_xscale("log")
+    ax.set_yscale("log")
+    ax.set_xlabel("Current traders $N_T$ (log scale)")
+    ax.set_ylabel("MSE removed by doubling participation")
+    ax.set_title("The return to doubling participation falls as $1/N_T$", pad=14)
+    ax.grid(axis="y", color=GRID, linewidth=0.7)
+    ax.set_axisbelow(True)
+    ax.legend(loc="lower left")
+
+    fig.tight_layout()
+    path = figures / "marginal_information_gain.png"
+    fig.savefig(path)
+    plt.close(fig)
+    print(f"wrote {path}")
+
+
 PLOTS = {
     "traders_vs_sources.csv": plot_traders_vs_information,
     "same_price.csv": plot_same_price,
     "worlds.csv": plot_official_boundary,
     "information_phase_slices.csv": plot_phase_slices,
+}
+
+# Rendered only when the participation-scale experiment has been run.
+OPTIONAL_PLOTS = {
+    "participation_scale.csv": plot_participation_scale,
+    "marginal_information_gain.csv": plot_marginal_gain,
 }
 
 # The two figures the README embeds, committed under assets/ so a reader does not
@@ -339,6 +476,9 @@ def main() -> int:
 
     for name, plot in PLOTS.items():
         plot(args.results, args.figures)
+    for name, plot in OPTIONAL_PLOTS.items():
+        if (args.results / name).exists():
+            plot(args.results, args.figures)
     if args.assets is not None:
         refresh_assets(args.figures, args.assets)
     return 0

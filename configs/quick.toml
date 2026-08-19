@@ -32,6 +32,10 @@ realizations_per_block = 4000
 [sensitivity.phase]
 realizations_per_block = 1000
 
+[participation_scale]
+realizations = 50000
+equivalence_realizations = 20000
+
 [validation]
 realizations = 50000
 same_price_realizations = 100000

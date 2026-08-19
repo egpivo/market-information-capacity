@@ -473,6 +473,63 @@ impl Default for SensitivitySpec {
     }
 }
 
+/// The participation-scale experiment.
+///
+/// Sweeps the trader count from a single participant to one million while the
+/// information budget stays fixed, which is the range over which the transition
+/// from rapid improvement to saturation is visible. The default grid keeps every
+/// point of the canonical [`GridSpec`] so the two experiments overlay.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ParticipationScaleSpec {
+    /// Trader counts on the analytic curve, ascending.
+    pub trader_values: Vec<usize>,
+    /// Trader counts that additionally receive Monte Carlo validation.
+    ///
+    /// Each value is also run at `2 N_T` so the simulated doubling gain can be
+    /// compared with its closed form.
+    pub mc_trader_values: Vec<usize>,
+    /// Source budgets to sweep.
+    pub k_values: Vec<usize>,
+    /// Source correlation, held at the canonical grid value.
+    pub rho_s: f64,
+    /// Source error scale, held at the canonical grid value.
+    pub sigma_s: f64,
+    /// Interpretation noise scale, held at the canonical grid value.
+    pub interpretation_sigma: f64,
+    /// Clientele tilt, held at the canonical grid value.
+    pub clientele_bias: f64,
+    /// Realizations per Monte Carlo validation cell.
+    pub realizations: usize,
+    /// Trader counts used for the aggregated-versus-explicit equivalence check.
+    pub equivalence_trader_values: Vec<usize>,
+    /// Realizations for the equivalence check, which materialises every trader.
+    pub equivalence_realizations: usize,
+    /// Tolerance in standard errors for Monte Carlo agreement with the curve.
+    pub parity_z_tolerance: f64,
+}
+
+impl Default for ParticipationScaleSpec {
+    fn default() -> Self {
+        Self {
+            trader_values: vec![
+                1, 2, 3, 5, 10, 20, 30, 50, 75, 100, 175, 250, 500, 750, 1_000, 1_750, 2_500,
+                5_000, 7_500, 10_000, 25_000, 50_000, 100_000, 250_000, 500_000, 1_000_000,
+            ],
+            mc_trader_values: vec![1, 5, 20, 100, 1_000, 10_000, 100_000, 1_000_000],
+            k_values: vec![2, 10, 50],
+            rho_s: 0.5,
+            sigma_s: 1.0,
+            interpretation_sigma: 0.8,
+            clientele_bias: 0.0,
+            realizations: 1_000_000,
+            equivalence_trader_values: vec![1, 10, 100, 1_000],
+            equivalence_realizations: 200_000,
+            parity_z_tolerance: 4.0,
+        }
+    }
+}
+
 /// Scale of the validation gate.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -522,6 +579,8 @@ pub struct Config {
     pub sensitivity: SensitivitySpec,
     /// Validation gate scale.
     pub validation: ValidationSpec,
+    /// Participation-scale experiment.
+    pub participation_scale: ParticipationScaleSpec,
 }
 
 impl Default for Config {
@@ -544,6 +603,7 @@ impl Config {
             same_price: SamePriceSpec::default(),
             sensitivity: SensitivitySpec::default(),
             validation: ValidationSpec::default(),
+            participation_scale: ParticipationScaleSpec::default(),
         }
     }
 
@@ -565,6 +625,8 @@ impl Config {
         cfg.validation.realizations = 50_000;
         cfg.validation.same_price_realizations = 100_000;
         cfg.validation.plateau_trader_values = vec![100, 1_000, 10_000];
+        cfg.participation_scale.realizations = 50_000;
+        cfg.participation_scale.equivalence_realizations = 20_000;
         cfg
     }
 
@@ -631,6 +693,27 @@ impl Config {
         if self.validation.realizations < 2 || self.validation.plateau_trader_values.is_empty() {
             return Err(Error::Config(
                 "validation gate needs realizations and at least one trader count".into(),
+            ));
+        }
+        let scale = &self.participation_scale;
+        if scale.trader_values.is_empty() || scale.k_values.is_empty() {
+            return Err(Error::Config(
+                "participation scale needs at least one trader count and one source budget".into(),
+            ));
+        }
+        if scale.trader_values.contains(&0) {
+            return Err(Error::Config(
+                "participation scale trader counts must be at least 1".into(),
+            ));
+        }
+        if !scale.trader_values.windows(2).all(|w| w[0] < w[1]) {
+            return Err(Error::Config(
+                "participation scale trader counts must be strictly ascending".into(),
+            ));
+        }
+        if scale.realizations < 2 {
+            return Err(Error::Config(
+                "participation scale needs at least two realizations per cell".into(),
             ));
         }
         Ok(())

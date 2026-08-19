@@ -8,7 +8,7 @@
 # only the figures are skipped.
 #
 # Usage:
-#   ./scripts/reproduce.sh              # publication scale, ~30 s on 10 cores
+#   ./scripts/reproduce.sh              # publication scale, a few seconds on 10 cores
 #   ./scripts/reproduce.sh --quick      # reduced scale, for a fast smoke test
 
 set -euo pipefail
@@ -38,6 +38,9 @@ cargo run --release --quiet -- validate "${SCALE_ARGS[@]}" --verbose
 
 echo "==> publication"
 cargo run --release --quiet -- publication "${SCALE_ARGS[@]}"
+
+echo "==> participation scale (one trader to one million)"
+cargo run --release --quiet -- scale-participation "${SCALE_ARGS[@]}"
 
 echo "==> figures"
 if python3 -c "import pandas, matplotlib" >/dev/null 2>&1; then
