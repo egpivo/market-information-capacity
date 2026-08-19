@@ -283,4 +283,3 @@ equivalence_trader_values = [
 ]
 equivalence_realizations = 200000
 parity_z_tolerance = 4.0
-
